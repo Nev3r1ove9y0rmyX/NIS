@@ -25,6 +25,16 @@
 
 四台电脑的联调与验收网络见 [组网与部署建议](docs/network-lab-plan.md)。
 
+## 设计基线
+
+- [课程要求核对表](docs/course-requirements-checklist.md)
+- [需求规格说明书](docs/requirements.md)
+- [角色与权限设计](docs/rbac.md)
+- [业务状态机](docs/workflow.md)
+- [系统总体架构](docs/architecture.md)
+- [需求追踪矩阵](docs/traceability.md)
+- [Sprint 01 任务卡](docs/sprint-01.md)
+
 ## 建议技术栈
 
 - 前端：Vue 3、Vite、TypeScript
