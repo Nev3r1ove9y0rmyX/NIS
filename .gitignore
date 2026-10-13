@@ -1,0 +1,53 @@
+# Secrets and local settings
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Course materials marked as non-public
+*.pdf
+*.doc
+*.docx
+*.ppt
+*.pptx
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+.vite/
+coverage/
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Runtime data
+logs/
+data/
+backups/
+uploads/
+*.log
+*.sqlite
+*.db
+
+# VM and packet captures
+*.vmdk
+*.vdi
+*.ova
+*.ovf
+*.pcap
+*.pcapng
