@@ -1,0 +1,604 @@
+openapi: 3.1.0
+
+info:
+  title: Reconnaissance Service（内部契约）
+  version: 0.1.0
+  description: |
+    端口 8002，Schema 为 nis_recon。负责侦察草稿、提交、分析员指派和证据元数据；
+    不创建分析报告，不写入其他服务的 Schema。状态机见 docs/workflow.md 第 2 节。
+
+    跨服务约定：
+    - 提交前调用 IAM `/internal/v1/users/resolve` 校验分析员候选资格；
+    - Analysis Service 通过 `/internal/v1/recon-records/{id}/authorized-view` 读取
+      必要数据，本服务负责判断调用方是否有权读取该记录的哪部分字段；
+    - 提交类接口必须幂等，重复请求返回原结果。
+
+servers:
+  - url: http://recon-service:8002
+
+tags:
+  - name: 侦察记录
+  - name: 授权读取
+  - name: 健康检查
+
+security:
+  - bearerAuth: []
+
+paths:
+  /internal/v1/recon-records:
+    get:
+      tags: [侦察记录]
+      operationId: reconListRecords
+      summary: 按范围查询侦察记录
+      description: 侦察员取本人记录；分析员取被指派记录；决策员不直接调用本接口。
+      parameters:
+        - name: viewer_user_id
+          in: query
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: status
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/ReconStatus'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 记录分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecordPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [侦察记录]
+      operationId: reconCreateRecord
+      summary: 创建草稿（幂等）
+      parameters:
+        - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconRecordCreate'
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecord'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/recon-records/{record_id}:
+    parameters:
+      - name: record_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [侦察记录]
+      operationId: reconGetRecord
+      summary: 记录详情（按调用方范围裁剪）
+      responses:
+        '200':
+          description: 记录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecord'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [侦察记录]
+      operationId: reconUpdateRecord
+      summary: 修改本人草稿（乐观锁）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconRecordPatch'
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecord'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /internal/v1/recon-records/{record_id}/submit:
+    parameters:
+      - name: record_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+    post:
+      tags: [侦察记录]
+      operationId: reconSubmitRecord
+      summary: 提交草稿并写入分析员指派
+      description: |
+        只接受 draft 状态。服务自身只把状态推进到 submitting，指派关系由同一本地事务
+        写入；Coordinator 在 IAM 校验通过后调用 `confirm-submission` 把状态推进到
+        assigned，失败则调用 `mark-compensation`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, analyst_ids]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                analyst_ids:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                priority:
+                  $ref: '../schemas/common.yaml#/components/schemas/Priority'
+      responses:
+        '200':
+          description: 已进入 submitting
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecord'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /internal/v1/recon-records/{record_id}/confirm-submission:
+    parameters:
+      - name: record_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [侦察记录]
+      operationId: reconConfirmSubmission
+      summary: Coordinator 确认指派成功，推进到 assigned
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200':
+          description: 已确认
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecord'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/recon-records/{record_id}/mark-compensation:
+    parameters:
+      - name: record_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [侦察记录]
+      operationId: reconMarkCompensation
+      summary: 下游持续失败时标记 compensation_required
+      description: 保留原请求 ID 与失败步骤，允许授权用户重试或取消；不得显示为提交成功。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [request_id, failed_step]
+              properties:
+                request_id:
+                  $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                failed_step:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: 已标记
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecord'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/recon-records/{record_id}/assignments:
+    get:
+      tags: [侦察记录]
+      operationId: reconListAssignments
+      summary: 查看记录的分析员指派与处理状态
+      parameters:
+        - name: record_id
+          in: path
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      responses:
+        '200':
+          description: 指派列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ReconAssignment'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /internal/v1/recon-records/{record_id}/analysis-state:
+    post:
+      tags: [侦察记录]
+      operationId: reconUpdateAnalysisState
+      summary: Analysis Service 回写处理进度
+      description: |
+        分析员开始处理时置 under_analysis；全部指派报告提交后置 analyzed；有拒绝时按
+        汇总规则更新。只允许由 Analysis Service 以服务身份调用。
+      parameters:
+        - name: record_id
+          in: path
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [analyst_id, assignment_status]
+              properties:
+                analyst_id:
+                  $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                assignment_status:
+                  type: string
+                  enum: [pending, in_progress, completed, rejected]
+                reject_reason:
+                  type: string
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecord'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/recon-records/{record_id}/authorized-view:
+    parameters:
+      - name: record_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [授权读取]
+      operationId: reconAuthorizedView
+      summary: 供 Analysis/Decision 读取授权字段
+      description: |
+        调用方必须声明请求者身份与用途。本服务判断请求者是否有权读取：分析员读取被指派
+        记录的全部业务字段，决策员只能读取报告已引用的记录摘要，其他情况返回 403。
+      parameters:
+        - name: requester_user_id
+          in: query
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: purpose
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [analysis, decision, audit]
+      responses:
+        '200':
+          description: 授权的只读视图
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconAuthorizedView'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /health/live:
+    get:
+      tags: [健康检查]
+      operationId: reconLive
+      summary: 存活检查
+      security: []
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /health/ready:
+    get:
+      tags: [健康检查]
+      operationId: reconReady
+      summary: 就绪检查（含数据库）
+      security: []
+      responses:
+        '200':
+          description: 就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Forbidden:
+      description: 无权限或资源范围不符
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    Conflict:
+      description: 版本冲突或非法状态转换
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ValidationError:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ServiceUnavailable:
+      description: 服务未就绪
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+
+  schemas:
+    Health:
+      type: object
+      required: [status, service, checked_at]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        service:
+          type: string
+          const: recon-service
+        checked_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+
+    EvidenceInput:
+      type: object
+      required: [file_name, media_type, sha256]
+      properties:
+        file_name:
+          type: string
+          maxLength: 255
+        media_type:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+
+    ReconRecordCreate:
+      type: object
+      required: [title, source_type, content, credibility, priority, owner_id]
+      properties:
+        owner_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        organization_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        title:
+          type: string
+          minLength: 2
+          maxLength: 200
+        source_type:
+          type: string
+          enum: [osint, sensor, report, document, other]
+        source_ref:
+          type: string
+          maxLength: 500
+        content:
+          type: string
+          minLength: 10
+          maxLength: 8000
+        credibility:
+          $ref: '../schemas/common.yaml#/components/schemas/Credibility'
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceInput'
+
+    ReconRecordPatch:
+      type: object
+      required: [expected_version]
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          maxLength: 200
+        source_type:
+          type: string
+        source_ref:
+          type: string
+        content:
+          type: string
+        credibility:
+          $ref: '../schemas/common.yaml#/components/schemas/Credibility'
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+
+    ReconAssignment:
+      type: object
+      required: [id, record_id, analyst_id, status]
+      properties:
+        id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        record_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        analyst_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        status:
+          type: string
+          enum: [pending, in_progress, completed, rejected]
+        assigned_by:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        assigned_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        responded_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        reject_reason:
+          type: string
+
+    Evidence:
+      allOf:
+        - $ref: '#/components/schemas/EvidenceInput'
+        - type: object
+          required: [id, storage_ref, created_at]
+          properties:
+            id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            storage_ref:
+              type: string
+              description: 受控存储引用，不返回绝对路径。
+            created_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            created_by:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+
+    ReconRecord:
+      allOf:
+        - $ref: '../schemas/common.yaml#/components/schemas/AuditFields'
+        - $ref: '../schemas/common.yaml#/components/schemas/VersionedResource'
+        - type: object
+          required: [id, record_no, title, status, credibility, priority, owner_id]
+          properties:
+            id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            record_no:
+              type: string
+            title:
+              type: string
+            source_type:
+              type: string
+            source_ref:
+              type: string
+            content:
+              type: string
+            status:
+              $ref: '../schemas/common.yaml#/components/schemas/ReconStatus'
+            credibility:
+              $ref: '../schemas/common.yaml#/components/schemas/Credibility'
+            priority:
+              $ref: '../schemas/common.yaml#/components/schemas/Priority'
+            owner_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            organization_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            assignments:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReconAssignment'
+            evidence:
+              type: array
+              items:
+                $ref: '#/components/schemas/Evidence'
+            submitted_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    ReconRecordPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconRecord'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    ReconAuthorizedView:
+      type: object
+      required: [record_id, granted, scope]
+      properties:
+        record_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        granted:
+          type: boolean
+        scope:
+          type: string
+          enum: [full, summary_only]
+        record:
+          $ref: '#/components/schemas/ReconRecord'
+      description: scope 为 summary_only 时只返回标题、可信度、优先级与来源摘要。

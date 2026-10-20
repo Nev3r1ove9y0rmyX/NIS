@@ -1,0 +1,790 @@
+openapi: 3.1.0
+
+info:
+  title: IAM & Organization Service（内部契约）
+  version: 0.1.0
+  description: |
+    服务端口 8001，仅监听 DMZ 内部服务网络，不做对外端口映射；数据 Schema 为
+    nis_iam。本服务是用户、角色、权限、组织与候选接收人的唯一所有者，其他服务
+    不得直接读写 nis_iam。
+
+    内部约定：
+    - 所有请求携带 Bearer JWT 与 X-Request-ID；服务间调用同时携带服务令牌；
+    - 服务必须独立验签 JWT，不信任 Gateway 传入的用户头；
+    - 错误体、枚举和分页组件复用 ../schemas/common.yaml。
+
+servers:
+  - url: http://iam-service:8001
+    description: Docker Compose 服务名（内部 DNS）
+  - url: http://localhost:8001
+
+tags:
+  - name: 认证
+  - name: 用户
+  - name: 角色与权限
+  - name: 组织
+  - name: 候选接收人
+  - name: 健康检查
+
+security:
+  - bearerAuth: []
+
+paths:
+  /internal/v1/auth/login:
+    post:
+      tags: [认证]
+      operationId: iamLogin
+      summary: 校验用户名密码并签发令牌
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                  writeOnly: true
+      responses:
+        '200':
+          description: 令牌与用户快照
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionView'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '423':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /internal/v1/auth/refresh:
+    post:
+      tags: [认证]
+      operationId: iamRefresh
+      summary: 刷新访问令牌
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: 新令牌
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /internal/v1/auth/me:
+    get:
+      tags: [认证]
+      operationId: iamCurrentUser
+      summary: 取当前用户、组织、角色与权限并集
+      responses:
+        '200':
+          description: 当前身份
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionView'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /internal/v1/auth/public-keys:
+    get:
+      tags: [认证]
+      operationId: iamPublicKeys
+      summary: 获取验签公钥（供业务服务缓存）
+      security: []
+      responses:
+        '200':
+          description: 公钥集合
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      required: [kid, alg, public_key_pem]
+                      properties:
+                        kid:
+                          type: string
+                        alg:
+                          type: string
+                          const: RS256
+                        public_key_pem:
+                          type: string
+
+  /internal/v1/users:
+    get:
+      tags: [用户]
+      operationId: iamListUsers
+      summary: 分页查询用户
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/UserStatus'
+        - name: organization_id
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: role_code
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 用户分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [用户]
+      operationId: iamCreateUser
+      summary: 创建用户（密码只出现一次，服务端哈希）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserView'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/users/{user_id}:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [用户]
+      operationId: iamGetUser
+      summary: 用户详情
+      responses:
+        '200':
+          description: 用户详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [用户]
+      operationId: iamUpdateUser
+      summary: 修改资料、组织或状态
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPatch'
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /internal/v1/users/{user_id}/roles:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [角色与权限]
+      operationId: iamListUserRoles
+      summary: 用户角色绑定
+      responses:
+        '200':
+          description: 绑定列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserRoleBinding'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      tags: [角色与权限]
+      operationId: iamAssignUserRole
+      summary: 绑定角色（支持 expires_at 限时）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role_code]
+              properties:
+                role_code:
+                  $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+                expires_at:
+                  $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+      responses:
+        '201':
+          description: 已绑定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRoleBinding'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/roles:
+    get:
+      tags: [角色与权限]
+      operationId: iamListRoles
+      summary: 角色及权限集合
+      responses:
+        '200':
+          description: 角色列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RoleView'
+    post:
+      tags: [角色与权限]
+      operationId: iamCreateRole
+      summary: 创建自定义角色
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name]
+              properties:
+                code:
+                  type: string
+                  pattern: '^[a-z][a-z0-9_]{2,31}$'
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleView'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/roles/{role_id}/permissions:
+    put:
+      tags: [角色与权限]
+      operationId: iamReplaceRolePermissions
+      summary: 全量替换角色权限
+      parameters:
+        - name: role_id
+          in: path
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permission_codes]
+              properties:
+                permission_codes:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: 已替换
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoleView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /internal/v1/permissions:
+    get:
+      tags: [角色与权限]
+      operationId: iamListPermissions
+      summary: 权限代码目录
+      responses:
+        '200':
+          description: 权限列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [code, name, domain]
+                      properties:
+                        code:
+                          type: string
+                        name:
+                          type: string
+                        domain:
+                          type: string
+
+  /internal/v1/organizations:
+    get:
+      tags: [组织]
+      operationId: iamListOrganizations
+      summary: 组织树
+      responses:
+        '200':
+          description: 组织列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OrganizationView'
+    post:
+      tags: [组织]
+      operationId: iamCreateOrganization
+      summary: 创建组织单元
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name, unit_type]
+              properties:
+                code:
+                  type: string
+                name:
+                  type: string
+                parent_id:
+                  $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                unit_type:
+                  type: string
+                  enum: [command, staff, recon_team, analysis_team, execution_team]
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationView'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/candidates:
+    get:
+      tags: [候选接收人]
+      operationId: iamListCandidates
+      summary: 按目标角色与组织规则筛选候选用户
+      description: 只返回账号启用、角色有效且组织规则匹配的用户。
+      parameters:
+        - name: target_role
+          in: query
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        - name: source_organization_id
+          in: query
+          required: false
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: 候选列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/CandidateView'
+
+  /internal/v1/users/resolve:
+    post:
+      tags: [候选接收人]
+      operationId: iamResolveUsers
+      summary: 批量校验一组用户是否满足指定角色与启用条件
+      description: |
+        Workflow Coordinator 在侦察提交、报告提交、指令下达前调用该接口，避免把
+        无效或越权用户写入指派关系。返回逐项判定结果，不因个别失败而整体 500。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_ids, required_role]
+              properties:
+                user_ids:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  items:
+                    $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                required_role:
+                  $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+      responses:
+        '200':
+          description: 逐项判定结果
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [user_id, valid]
+                      properties:
+                        user_id:
+                          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                        valid:
+                          type: boolean
+                        reason:
+                          type: string
+
+  /health/live:
+    get:
+      tags: [健康检查]
+      operationId: iamLive
+      summary: 存活检查
+      security: []
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+
+  /health/ready:
+    get:
+      tags: [健康检查]
+      operationId: iamReady
+      summary: 就绪检查（含数据库）
+      security: []
+      responses:
+        '200':
+          description: 就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthenticated:
+      description: 未认证或令牌无效
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: 无权限
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: 唯一约束、重复绑定或版本冲突
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationError:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ServiceUnavailable:
+      description: 服务未就绪
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      $ref: '../schemas/common.yaml#/components/schemas/Error'
+
+    Health:
+      type: object
+      required: [status, service, checked_at]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        service:
+          type: string
+          const: iam-service
+        checked_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+
+    TokenPair:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+          const: Bearer
+        expires_in:
+          type: integer
+
+    SessionView:
+      type: object
+      required: [user, token]
+      properties:
+        user:
+          $ref: '#/components/schemas/UserView'
+        token:
+          $ref: '#/components/schemas/TokenPair'
+
+    UserView:
+      type: object
+      required: [id, username, display_name, status, organization, roles, permissions]
+      properties:
+        id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        username:
+          type: string
+        display_name:
+          type: string
+        status:
+          $ref: '../schemas/common.yaml#/components/schemas/UserStatus'
+        organization:
+          $ref: '#/components/schemas/OrganizationView'
+        roles:
+          type: array
+          items:
+            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        permissions:
+          type: array
+          items:
+            type: string
+        last_login_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    UserCreate:
+      type: object
+      required: [username, password, display_name, organization_id, role_codes]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          writeOnly: true
+        display_name:
+          type: string
+        organization_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        role_codes:
+          type: array
+          minItems: 1
+          items:
+            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+
+    UserPatch:
+      type: object
+      properties:
+        display_name:
+          type: string
+        organization_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        status:
+          $ref: '../schemas/common.yaml#/components/schemas/UserStatus'
+        new_password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          writeOnly: true
+
+    UserPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserView'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    UserRoleBinding:
+      type: object
+      required: [role_code, granted_at]
+      properties:
+        role_code:
+          $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        granted_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        granted_by:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        expires_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    RoleView:
+      type: object
+      required: [id, code, name, is_system, permissions]
+      properties:
+        id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        is_system:
+          type: boolean
+        permissions:
+          type: array
+          items:
+            type: string
+
+    OrganizationView:
+      type: object
+      required: [id, code, name, unit_type, is_active]
+      properties:
+        id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        code:
+          type: string
+        name:
+          type: string
+        parent_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        unit_type:
+          type: string
+          enum: [command, staff, recon_team, analysis_team, execution_team]
+        is_active:
+          type: boolean
+
+    CandidateView:
+      type: object
+      required: [user_id, display_name, role_code, organization_id, organization_name]
+      properties:
+        user_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        display_name:
+          type: string
+        role_code:
+          $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        organization_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        organization_name:
+          type: string
+        online:
+          type: boolean

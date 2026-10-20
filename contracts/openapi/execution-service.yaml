@@ -1,0 +1,509 @@
+openapi: 3.1.0
+
+info:
+  title: Execution Service（内部契约）
+  version: 0.1.0
+  description: |
+    端口 8005，Schema 为 nis_execution。负责个人执行分配、接收/拒绝、执行状态和
+    执行结果明细；不修改指令核心内容。个人分配状态机见 docs/workflow.md 第 5 节。
+
+    跨服务约定：
+    - 只有 Decision Service 的请求可以创建个人分配（Coordinator 转发）；
+    - 个人状态变化后回写 Decision 的 assignment-state 接口以重算总体状态；
+    - 完成/失败后重复提交返回原结果或 409，不创建第二份结果。
+
+servers:
+  - url: http://execution-service:8005
+
+tags:
+  - name: 执行分配
+  - name: 健康检查
+
+security:
+  - bearerAuth: []
+
+paths:
+  /internal/v1/assignments:
+    post:
+      tags: [执行分配]
+      operationId: executionCreateAssignments
+      summary: 为一条指令批量创建个人分配
+      description: |
+        由 Coordinator 在指令进入 issuing 后调用。同一 command_id 重复调用必须幂等，
+        返回已存在的分配，不得重复创建。全部成功返回 201。
+      parameters:
+        - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignmentCreateBatch'
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [command_id, items]
+                properties:
+                  command_id:
+                    $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Assignment'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    get:
+      tags: [执行分配]
+      operationId: executionListAssignments
+      summary: 查询指定执行员的分配
+      parameters:
+        - name: executor_id
+          in: query
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: status
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/AssignmentStatus'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 分配分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssignmentPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /internal/v1/assignments/{assignment_id}:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [执行分配]
+      operationId: executionGetAssignment
+      summary: 分配详情
+      responses:
+        '200':
+          description: 分配
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /internal/v1/assignments/{assignment_id}/accept:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [执行分配]
+      operationId: executionAccept
+      summary: 接收（pending -> accepted）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+      responses:
+        '200':
+          description: 已接收
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/assignments/{assignment_id}/reject:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [执行分配]
+      operationId: executionReject
+      summary: 拒绝（必须填写理由）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, reason]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                reason:
+                  type: string
+                  minLength: 2
+                  maxLength: 500
+      responses:
+        '200':
+          description: 已拒绝
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /internal/v1/assignments/{assignment_id}/start:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [执行分配]
+      operationId: executionStart
+      summary: 开始执行（accepted -> executing）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+      responses:
+        '200':
+          description: 执行中
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/assignments/{assignment_id}/complete:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+    post:
+      tags: [执行分配]
+      operationId: executionComplete
+      summary: 提交结果（幂等）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, outcome, summary]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                outcome:
+                  $ref: '../schemas/common.yaml#/components/schemas/AssignmentOutcome'
+                summary:
+                  type: string
+                  minLength: 2
+                  maxLength: 2000
+                detail:
+                  type: string
+                  maxLength: 8000
+                evidence:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/EvidenceInput'
+      responses:
+        '200':
+          description: 结果已保存
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /internal/v1/commands/{command_id}/summary:
+    parameters:
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [执行分配]
+      operationId: executionCommandSummary
+      summary: 指令下全部个人分配与结果汇总
+      description: 供 Gateway 聚合决策员视图；不返回其他执行员的敏感备注。
+      responses:
+        '200':
+          description: 汇总
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandExecutionSummary'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /health/live:
+    get:
+      tags: [健康检查]
+      operationId: executionLive
+      summary: 存活检查
+      security: []
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /health/ready:
+    get:
+      tags: [健康检查]
+      operationId: executionReady
+      summary: 就绪检查
+      security: []
+      responses:
+        '200':
+          description: 就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Forbidden:
+      description: 无权限或资源范围不符
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    Conflict:
+      description: 版本冲突或非法状态转换
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ValidationError:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ServiceUnavailable:
+      description: 服务未就绪
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+
+  schemas:
+    Health:
+      type: object
+      required: [status, service, checked_at]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        service:
+          type: string
+          const: execution-service
+        checked_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+
+    TransitionRequest:
+      type: object
+      required: [expected_version]
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+
+    EvidenceInput:
+      type: object
+      required: [file_name, media_type, sha256]
+      properties:
+        file_name:
+          type: string
+          maxLength: 255
+        media_type:
+          type: string
+        size_bytes:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+
+    Evidence:
+      allOf:
+        - $ref: '#/components/schemas/EvidenceInput'
+        - type: object
+          required: [id, storage_ref, created_at]
+          properties:
+            id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            storage_ref:
+              type: string
+            created_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    AssignmentCreateBatch:
+      type: object
+      required: [command_id, command_title, priority, executor_ids, created_by]
+      properties:
+        command_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        command_title:
+          type: string
+        command_content:
+          type: string
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+        deadline:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        executor_ids:
+          type: array
+          minItems: 1
+          items:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        created_by:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+
+    ExecutionResult:
+      type: object
+      required: [outcome, summary, reported_at]
+      properties:
+        outcome:
+          $ref: '../schemas/common.yaml#/components/schemas/AssignmentOutcome'
+        summary:
+          type: string
+        detail:
+          type: string
+        reported_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        reported_by:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/Evidence'
+
+    Assignment:
+      allOf:
+        - $ref: '../schemas/common.yaml#/components/schemas/AuditFields'
+        - $ref: '../schemas/common.yaml#/components/schemas/VersionedResource'
+        - type: object
+          required: [id, command_id, executor_id, status, command_title_snapshot]
+          properties:
+            id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            command_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            command_title_snapshot:
+              type: string
+            command_content_snapshot:
+              type: string
+            priority:
+              $ref: '../schemas/common.yaml#/components/schemas/Priority'
+            deadline:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            executor_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            status:
+              $ref: '../schemas/common.yaml#/components/schemas/AssignmentStatus'
+            accepted_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            started_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            completed_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            reject_reason:
+              type: string
+            result:
+              $ref: '#/components/schemas/ExecutionResult'
+
+    AssignmentPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Assignment'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    CommandExecutionSummary:
+      type: object
+      required: [command_id, aggregate_status, items]
+      properties:
+        command_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        aggregate_status:
+          $ref: '../schemas/common.yaml#/components/schemas/CommandStatus'
+        items:
+          type: array
+          items:
+            type: object
+            required: [assignment_id, executor_id, status]
+            properties:
+              assignment_id:
+                $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+              executor_id:
+                $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+              status:
+                $ref: '../schemas/common.yaml#/components/schemas/AssignmentStatus'
+              outcome:
+                $ref: '../schemas/common.yaml#/components/schemas/AssignmentOutcome'
+              completed_at:
+                $ref: '../schemas/common.yaml#/components/schemas/Timestamp'

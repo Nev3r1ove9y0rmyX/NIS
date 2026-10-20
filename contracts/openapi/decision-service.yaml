@@ -1,0 +1,583 @@
+openapi: 3.1.0
+
+info:
+  title: Decision Service（内部契约）
+  version: 0.1.0
+  description: |
+    端口 8004，Schema 为 nis_decision。负责指令草稿、冲突检查、下达、取消和总体
+    状态摘要；不改写分析报告，不保存执行结果明细（执行结果属于 execution-service）。
+    状态机见 docs/workflow.md 第 4 至 5 节。
+
+    跨服务约定：
+    - 读取报告只通过 analysis-service 的授权接口；
+    - 下达前调用 IAM `/internal/v1/users/resolve` 校验执行员候选资格；
+    - 指令从 issuing 进入 issued 的条件是 Execution Service 成功创建全部个人分配；
+    - 总体状态由 Execution 回写的个人分配状态汇总，Decision 不猜测个人状态。
+
+servers:
+  - url: http://decision-service:8004
+
+tags:
+  - name: 指令
+  - name: 冲突检查
+  - name: 健康检查
+
+security:
+  - bearerAuth: []
+
+paths:
+  /internal/v1/commands:
+    get:
+      tags: [指令]
+      operationId: decisionListCommands
+      summary: 按范围查询指令
+      parameters:
+        - name: viewer_user_id
+          in: query
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: status
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/CommandStatus'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 指令分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [指令]
+      operationId: decisionCreateCommand
+      summary: 创建指令草稿（幂等）
+      parameters:
+        - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandCreate'
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/commands/{command_id}:
+    parameters:
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [指令]
+      operationId: decisionGetCommand
+      summary: 指令详情
+      responses:
+        '200':
+          description: 指令
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [指令]
+      operationId: decisionUpdateCommand
+      summary: 修改草稿（乐观锁），下达后禁止直接改写核心内容
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandPatch'
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/commands/conflicts:
+    get:
+      tags: [冲突检查]
+      operationId: decisionCheckConflicts
+      summary: 查询同一报告/目标上的活动指令
+      parameters:
+        - name: source_report_id
+          in: query
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: objective
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: exclude_command_id
+          in: query
+          required: false
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      responses:
+        '200':
+          description: 冲突检查结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictResult'
+
+  /internal/v1/commands/{command_id}/issue:
+    parameters:
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+    post:
+      tags: [指令]
+      operationId: decisionIssueCommand
+      summary: 下达指令（进入 issuing）
+      description: |
+        只接受 draft。潜在冲突未确认时返回 409 WORKFLOW_CONFLICT。成功后状态为
+        issuing 并返回指令；Coordinator 创建执行分配后调用 confirm-issue。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, executor_ids, conflict_acknowledged]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                executor_ids:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                conflict_acknowledged:
+                  type: boolean
+      responses:
+        '200':
+          description: 已进入 issuing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /internal/v1/commands/{command_id}/confirm-issue:
+    parameters:
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [指令]
+      operationId: decisionConfirmIssue
+      summary: Coordinator 确认全部分配创建成功，推进到 issued
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, assignments]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                assignments:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [assignment_id, executor_id]
+                    properties:
+                      assignment_id:
+                        $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                      executor_id:
+                        $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      responses:
+        '200':
+          description: 已下达
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/commands/{command_id}/cancel:
+    parameters:
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [指令]
+      operationId: decisionCancelCommand
+      summary: 取消尚未产生完成结果的指令
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, reason]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                reason:
+                  type: string
+                  minLength: 2
+                  maxLength: 500
+      responses:
+        '200':
+          description: 已取消
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/commands/{command_id}/assignment-state:
+    post:
+      tags: [指令]
+      operationId: decisionApplyAssignmentState
+      summary: Execution 回写个人分配状态并重算总体状态
+      description: |
+        汇总规则见 docs/workflow.md 第 5 节。本接口只接受服务身份调用，重复回写同一
+        分配状态必须幂等。
+      parameters:
+        - name: command_id
+          in: path
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [assignment_id, executor_id, status]
+              properties:
+                assignment_id:
+                  $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                executor_id:
+                  $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                status:
+                  $ref: '../schemas/common.yaml#/components/schemas/AssignmentStatus'
+      responses:
+        '200':
+          description: 更新后的总体状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/commands/{command_id}/status:
+    parameters:
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [指令]
+      operationId: decisionGetStatus
+      summary: 总体状态与个人分配摘要
+      responses:
+        '200':
+          description: 状态视图
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandStatusView'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /health/live:
+    get:
+      tags: [健康检查]
+      operationId: decisionLive
+      summary: 存活检查
+      security: []
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /health/ready:
+    get:
+      tags: [健康检查]
+      operationId: decisionReady
+      summary: 就绪检查
+      security: []
+      responses:
+        '200':
+          description: 就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Forbidden:
+      description: 无权限或资源范围不符
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    Conflict:
+      description: 版本冲突、非法状态转换或未确认冲突
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ValidationError:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ServiceUnavailable:
+      description: 服务未就绪
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+
+  schemas:
+    Health:
+      type: object
+      required: [status, service, checked_at]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        service:
+          type: string
+          const: decision-service
+        checked_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+
+    CommandCreate:
+      type: object
+      required:
+        - decision_maker_id
+        - organization_id
+        - title
+        - objective
+        - content
+        - priority
+        - source_report_id
+      properties:
+        decision_maker_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        organization_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        title:
+          type: string
+          minLength: 2
+          maxLength: 200
+        objective:
+          type: string
+          minLength: 2
+          maxLength: 500
+        content:
+          type: string
+          minLength: 10
+          maxLength: 8000
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+        deadline:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        source_report_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+
+    CommandPatch:
+      type: object
+      required: [expected_version]
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+        objective:
+          type: string
+        content:
+          type: string
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+        deadline:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    AssignmentSummary:
+      type: object
+      required: [assignment_id, executor_id, status]
+      properties:
+        assignment_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        executor_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        status:
+          $ref: '../schemas/common.yaml#/components/schemas/AssignmentStatus'
+        updated_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    Command:
+      allOf:
+        - $ref: '../schemas/common.yaml#/components/schemas/AuditFields'
+        - $ref: '../schemas/common.yaml#/components/schemas/VersionedResource'
+        - type: object
+          required:
+            - id
+            - command_no
+            - title
+            - status
+            - priority
+            - decision_maker_id
+            - source_report_id
+          properties:
+            id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            command_no:
+              type: string
+            title:
+              type: string
+            objective:
+              type: string
+            content:
+              type: string
+            status:
+              $ref: '../schemas/common.yaml#/components/schemas/CommandStatus'
+            priority:
+              $ref: '../schemas/common.yaml#/components/schemas/Priority'
+            deadline:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            decision_maker_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            organization_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            source_report_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            assignments:
+              type: array
+              items:
+                $ref: '#/components/schemas/AssignmentSummary'
+            issued_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            cancelled_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            cancel_reason:
+              type: string
+
+    CommandPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Command'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    ConflictResult:
+      type: object
+      required: [has_conflict, conflicts]
+      properties:
+        has_conflict:
+          type: boolean
+        conflicts:
+          type: array
+          items:
+            type: object
+            required: [command_id, command_no, status]
+            properties:
+              command_id:
+                $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+              command_no:
+                type: string
+              status:
+                $ref: '../schemas/common.yaml#/components/schemas/CommandStatus'
+              reason:
+                type: string
+
+    CommandStatusView:
+      type: object
+      required: [command_id, status, assignments]
+      properties:
+        command_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        status:
+          $ref: '../schemas/common.yaml#/components/schemas/CommandStatus'
+        assignments:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssignmentSummary'
+        updated_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
