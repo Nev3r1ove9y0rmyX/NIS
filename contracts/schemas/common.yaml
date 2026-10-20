@@ -240,17 +240,10 @@ components:
           type: integer
           minimum: 0
 
-    # ---------- 通用请求体 ----------
-
-    IdempotentSubmit:
-      type: object
-      description: 关键提交操作的通用请求体基类；幂等键同时要求出现在 Idempotency-Key 请求头。
-      required: [expected_version]
-      properties:
-        expected_version:
-          type: integer
-          minimum: 1
-          description: 提交时客户端持有的版本号，用于并发冲突检测。
+    # ---------- 通用说明 ----------
+    #
+    # 关键提交的请求体由各契约直接定义（含 expected_version），不提供通用基类，
+    # 避免继承关系掩盖真正的必填字段。
 
   parameters:
     PageParam:
