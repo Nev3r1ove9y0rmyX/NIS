@@ -1,0 +1,2645 @@
+openapi: 3.1.0
+
+info:
+  title: NIS 协同调度信息系统 公共 API（API Gateway）
+  version: 0.1.0
+  description: |
+    浏览器唯一允许访问的业务入口。所有路径均以 /api/v1 为前缀，除健康检查外都需要
+    Bearer JWT。Gateway 负责路由、生成并透传 X-Request-ID、聚合只读视图，但不代替
+    业务服务做授权判断：每个下游服务仍独立校验身份、权限、资源范围和资源状态。
+
+    契约基线说明：
+    - 枚举、错误体、分页和通用字段复用 ../schemas/common.yaml；
+    - 状态与状态转换规则见 docs/workflow.md，权限代码见 docs/rbac.md，接口清单见
+      docs/api-catalog.md，数据表结构见 docs/data-model.md；
+    - 关键提交（创建、提交、下达、结果上报）必须携带 Idempotency-Key；
+    - 本文件由 A 维护，任何破坏兼容性的修改必须按 docs/service-contracts.md 第 8 节评审。
+
+servers:
+  - url: http://10.1.1.20:8000/api/v1
+    description: DMZ 演示环境（示例地址，以 D 的地址表为准）
+  - url: http://localhost:8000/api/v1
+    description: 本地开发环境
+
+tags:
+  - name: 认证与身份
+    description: 登录、刷新、登出和当前身份
+  - name: 组织与候选用户
+    description: 组织结构、候选接收人筛选
+  - name: 管理
+    description: 用户、角色、权限与组织管理，需要 iam:manage 或 organization:manage
+  - name: 侦察
+    description: 侦察员工作台
+  - name: 分析
+    description: 分析员工作台
+  - name: 决策
+    description: 决策员工作台
+  - name: 执行
+    description: 执行员工作台
+  - name: AI 辅助
+    description: 四类环节共用的建议与人工确认接口
+  - name: 审计
+    description: 操作日志与调用链还原
+  - name: 健康检查
+    description: 存活与就绪检查，不需要认证
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ==================== 认证与身份 ====================
+
+  /auth/login:
+    post:
+      tags: [认证与身份]
+      operationId: login
+      summary: 用户名密码登录（每次会话只认证一次）
+      description: |
+        校验账号与密码，返回访问令牌、刷新令牌和用户快照。后续业务操作只校验令牌，
+        不得在业务流程中再次要求认证。失败登录写审计并累计失败次数。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 认证成功
+          headers:
+            X-Request-ID:
+              $ref: '../schemas/common.yaml#/components/headers/RequestId'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '423':
+          description: 账号被锁定
+          content:
+            application/json:
+              schema:
+                $ref: '../schemas/common.yaml#/components/schemas/Error'
+
+  /auth/refresh:
+    post:
+      tags: [认证与身份]
+      operationId: refreshToken
+      summary: 用刷新令牌换取新的访问令牌
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: 刷新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /auth/logout:
+    post:
+      tags: [认证与身份]
+      operationId: logout
+      summary: 登出并作废当前令牌
+      responses:
+        '204':
+          description: 已登出
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /auth/me:
+    get:
+      tags: [认证与身份]
+      operationId: getCurrentUser
+      summary: 获取当前用户、组织、有效角色与权限
+      description: |
+        返回当前会话的有效角色和权限并集。前端据此决定可见工作台；后端仍以每次请求
+        的服务端校验为准。
+      responses:
+        '200':
+          description: 当前身份
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  # ==================== 组织与候选用户 ====================
+
+  /organizations:
+    get:
+      tags: [组织与候选用户]
+      operationId: listOrganizations
+      summary: 查看组织结构（树形）
+      responses:
+        '200':
+          description: 组织树
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OrganizationUnit'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  /candidates:
+    get:
+      tags: [组织与候选用户]
+      operationId: listCandidates
+      summary: 按目标角色筛选合法候选接收人
+      description: |
+        只返回同时满足“账号启用、目标角色有效、组织规则匹配”的用户，未授权或无关用户
+        不得出现。侦察提交查分析员、报告提交查决策员、指令下达查执行员。
+      parameters:
+        - name: target_role
+          in: query
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        - name: source_record_id
+          in: query
+          required: false
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+          description: 侦察记录 ID，用于按组织规则进一步收窄候选范围
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 候选用户列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, page_size, total]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Candidate'
+                  page:
+                    type: integer
+                  page_size:
+                    type: integer
+                  total:
+                    type: integer
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+
+  # ==================== 管理 ====================
+
+  /admin/organizations:
+    post:
+      tags: [管理]
+      operationId: createOrganization
+      summary: 创建组织单元
+      description: 需要 organization:manage。code 唯一；parent_id 为空表示根节点。
+      parameters:
+        - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name, unit_type]
+              properties:
+                code:
+                  type: string
+                  pattern: '^[A-Za-z][A-Za-z0-9_-]{2,63}$'
+                name:
+                  type: string
+                  maxLength: 128
+                parent_id:
+                  $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                unit_type:
+                  type: string
+                  enum: [command, staff, recon_team, analysis_team, execution_team]
+                sort_order:
+                  type: integer
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationUnit'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /admin/users:
+    get:
+      tags: [管理]
+      operationId: listUsers
+      summary: 分页查询用户
+      description: 需要 iam:manage。响应不得包含密码哈希。
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/UserStatus'
+        - name: role_code
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        - name: organization_id
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 用户分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPage'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [管理]
+      operationId: createUser
+      summary: 创建用户
+      description: 需要 iam:manage。用户名唯一，密码只在请求中出现一次，服务端哈希保存。
+      parameters:
+        - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSummary'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /admin/users/{user_id}:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [管理]
+      operationId: getUser
+      summary: 查看用户详情（含角色与权限并集）
+      responses:
+        '200':
+          description: 用户详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDetail'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [管理]
+      operationId: updateUser
+      summary: 修改用户资料、组织或状态
+      description: 需要 iam:manage。停用用户后其新请求和登录立即失败。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDetail'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /admin/users/{user_id}/roles:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [管理]
+      operationId: listUserRoles
+      summary: 查看用户全部角色绑定
+      responses:
+        '200':
+          description: 角色绑定
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/UserRoleBinding'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [管理]
+      operationId: assignUserRole
+      summary: 为用户绑定角色（支持限时）
+      description: |
+        用户与角色为多对多。expires_at 预留给“限时角色自动回收”扩展目标，
+        当前实现可忽略该字段但必须原样保存。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role_code]
+              properties:
+                role_code:
+                  $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+                expires_at:
+                  $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+      responses:
+        '201':
+          description: 已绑定
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRoleBinding'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /admin/users/{user_id}/roles/{role_code}:
+    delete:
+      tags: [管理]
+      operationId: revokeUserRole
+      summary: 解除用户角色绑定
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: role_code
+          in: path
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+      responses:
+        '204':
+          description: 已解除
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/roles:
+    get:
+      tags: [管理]
+      operationId: listRoles
+      summary: 查看角色及其权限
+      responses:
+        '200':
+          description: 角色列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Role'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [管理]
+      operationId: createRole
+      summary: 创建自定义角色
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name]
+              properties:
+                code:
+                  type: string
+                  pattern: '^[a-z][a-z0-9_]{2,31}$'
+                name:
+                  type: string
+                description:
+                  type: string
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /admin/roles/{role_id}/permissions:
+    put:
+      tags: [管理]
+      operationId: replaceRolePermissions
+      summary: 全量替换角色权限（基于角色赋权）
+      description: |
+        权限绑定到角色而不是用户；替换后关联用户的后续授权结果同步变化。
+        系统标准角色（is_system）允许调整权限集合，但不允许删除角色本身。
+      parameters:
+        - name: role_id
+          in: path
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permission_codes]
+              properties:
+                permission_codes:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: 已替换
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /admin/permissions:
+    get:
+      tags: [管理]
+      operationId: listPermissions
+      summary: 查看全部权限代码
+      responses:
+        '200':
+          description: 权限列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Permission'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ==================== 侦察 ====================
+
+  /recon-records:
+    get:
+      tags: [侦察]
+      operationId: listReconRecords
+      summary: 查询侦察记录
+      description: |
+        侦察员只看到本人记录；分析员只看到指派给自己的记录。直接使用记录 ID 访问
+        同样要重新校验范围，不能依赖前端隐藏。
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/ReconStatus'
+        - name: priority
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Priority'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+        - name: X-Role-Context
+          in: header
+          required: false
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+      responses:
+        '200':
+          description: 侦察记录分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecordPage'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [侦察]
+      operationId: createReconRecord
+      summary: 创建侦察草稿
+      description: 需要 recon:create。创建者为记录所有者，草稿可反复保存。
+      parameters:
+        - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconRecordWrite'
+      responses:
+        '201':
+          description: 已创建草稿
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecord'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /recon-records/{record_id}:
+    parameters:
+      - name: record_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [侦察]
+      operationId: getReconRecord
+      summary: 查看侦察记录详情
+      responses:
+        '200':
+          description: 记录详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecord'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [侦察]
+      operationId: updateReconRecord
+      summary: 修改本人草稿
+      description: 只有 draft 状态且本人可编辑；提交后普通编辑接口返回 409 WORKFLOW_CONFLICT。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReconRecordPatch'
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecord'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /recon-records/{record_id}/submit:
+    parameters:
+      - name: record_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+    post:
+      tags: [侦察]
+      operationId: submitReconRecord
+      summary: 提交侦察记录并指派分析员
+      description: |
+        需要 recon:submit。提交后进入 submitting，由 Gateway 的 Workflow Coordinator
+        调用 IAM 校验候选分析员并建立指派；全部成功才变为 assigned，否则进入
+        compensation_required。同一幂等键重复提交返回原结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, analyst_ids]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                analyst_ids:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                priority:
+                  $ref: '../schemas/common.yaml#/components/schemas/Priority'
+      responses:
+        '200':
+          description: 提交结果（可能是 assigned 或 compensation_required）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconRecord'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+
+  # ==================== 分析 ====================
+
+  /analysis-reports:
+    get:
+      tags: [分析]
+      operationId: listAnalysisReports
+      summary: 查询分析报告
+      description: 分析员查看本人报告；决策员查看指派给自己的报告；多名分析员的报告并列返回，不合并。
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/ReportStatus'
+        - name: recon_record_id
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 报告分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisReportPage'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [分析]
+      operationId: createAnalysisReport
+      summary: 创建分析报告草稿
+      description: 需要 analysis:create。至少关联一条本人有权读取的侦察记录。
+      parameters:
+        - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalysisReportWrite'
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisReport'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /analysis-reports/{report_id}:
+    parameters:
+      - name: report_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [分析]
+      operationId: getAnalysisReport
+      summary: 查看分析报告详情（含引用的侦察依据）
+      responses:
+        '200':
+          description: 报告详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisReport'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [分析]
+      operationId: updateAnalysisReport
+      summary: 修改本人报告草稿
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnalysisReportPatch'
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisReport'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /analysis-reports/{report_id}/submit:
+    parameters:
+      - name: report_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+    post:
+      tags: [分析]
+      operationId: submitAnalysisReport
+      summary: 提交分析报告并指派决策员
+      description: |
+        需要 analysis:submit。提交前必须完成 AI 内容的人工确认或舍弃，否则返回
+        422 VALIDATION_ERROR（字段 ai_content_confirmed）。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, decision_maker_ids]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                decision_maker_ids:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      responses:
+        '200':
+          description: 提交结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisReport'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+
+  # ==================== 决策 ====================
+
+  /commands:
+    get:
+      tags: [决策]
+      operationId: listCommands
+      summary: 查询指令
+      description: 决策员查看本人创建的指令；执行员只能看到分配给自己的指令。
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/CommandStatus'
+        - name: priority
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Priority'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 指令分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandPage'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [决策]
+      operationId: createCommand
+      summary: 创建指令草稿
+      description: 需要 command:create。必须关联本人有权读取的分析报告。
+      parameters:
+        - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandWrite'
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /commands/conflicts:
+    get:
+      tags: [决策]
+      operationId: checkCommandConflicts
+      summary: 下达前检查同一目标上的活动指令
+      parameters:
+        - name: source_report_id
+          in: query
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: objective
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 冲突检查结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictCheckResult'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /commands/{command_id}:
+    parameters:
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [决策]
+      operationId: getCommand
+      summary: 查看指令详情
+      responses:
+        '200':
+          description: 指令详情（含各执行分配状态摘要）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [决策]
+      operationId: updateCommand
+      summary: 修改本人指令草稿
+      description: 下达后不允许直接改写核心内容，需取消旧指令后创建新指令。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommandPatch'
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /commands/{command_id}/issue:
+    parameters:
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+    post:
+      tags: [决策]
+      operationId: issueCommand
+      summary: 下达指令给一个或多个执行员
+      description: |
+        需要 command:issue。下达前必须完成冲突检查；存在潜在冲突时必须显式传入
+        conflict_acknowledged=true，否则返回 409 WORKFLOW_CONFLICT。全部个人分配
+        创建成功才从 issuing 变为 issued，重复幂等请求返回原指令。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, executor_ids, conflict_acknowledged]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                executor_ids:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                conflict_acknowledged:
+                  type: boolean
+                  description: 冲突检查发现潜在冲突时，决策员必须确认后置为 true。
+      responses:
+        '200':
+          description: 下达结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/DependencyFailure'
+
+  /commands/{command_id}/cancel:
+    parameters:
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [决策]
+      operationId: cancelCommand
+      summary: 取消尚未产生完成结果的指令
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, reason]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                reason:
+                  type: string
+                  minLength: 2
+                  maxLength: 500
+      responses:
+        '200':
+          description: 已取消
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Command'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /commands/{command_id}/status:
+    parameters:
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [决策]
+      operationId: getCommandStatus
+      summary: 查看指令总体状态与各执行员状态
+      description: Gateway 聚合 Decision 的总体状态和 Execution 的个人分配状态，只读。
+      responses:
+        '200':
+          description: 状态视图
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandStatusView'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /commands/{command_id}/results:
+    parameters:
+      - name: command_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [决策]
+      operationId: listCommandResults
+      summary: 查看每个执行员的执行结果
+      description: 决策员可查看本人相关指令的各接收人结果；执行员只能看到本人结果。
+      responses:
+        '200':
+          description: 执行结果列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ExecutionResult'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ==================== 执行 ====================
+
+  /assignments:
+    get:
+      tags: [执行]
+      operationId: listAssignments
+      summary: 查询本人执行分配
+      description: 执行员只能看到分配给自己的分配，看不到其他执行员的私有结果。
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/AssignmentStatus'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 分配分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssignmentPage'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /assignments/{assignment_id}:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [执行]
+      operationId: getAssignment
+      summary: 查看分配详情（含指令只读快照）
+      responses:
+        '200':
+          description: 分配详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /assignments/{assignment_id}/accept:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [执行]
+      operationId: acceptAssignment
+      summary: 接收指令
+      description: 需要 execution:respond。只有 pending 状态可接收，重复接收返回 409。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200':
+          description: 已接收
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /assignments/{assignment_id}/reject:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [执行]
+      operationId: rejectAssignment
+      summary: 拒绝指令
+      description: 需要 execution:respond。必须填写理由，指令总体状态按其余分配汇总。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, reason]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                reason:
+                  type: string
+                  minLength: 2
+                  maxLength: 500
+      responses:
+        '200':
+          description: 已拒绝
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /assignments/{assignment_id}/start:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [执行]
+      operationId: startAssignment
+      summary: 标记开始执行
+      description: 需要 execution:update。只有 accepted 或 executing 可进入 executing。
+      responses:
+        '200':
+          description: 执行中
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /assignments/{assignment_id}/complete:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+    post:
+      tags: [执行]
+      operationId: completeAssignment
+      summary: 提交执行结果
+      description: |
+        需要 execution:submit。结果包括结论、说明、时间和证据元数据。完成后重复提交
+        返回原结果或 409，不创建第二份结果；网络重试不得产生重复结果。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, outcome, summary]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                outcome:
+                  $ref: '../schemas/common.yaml#/components/schemas/AssignmentOutcome'
+                summary:
+                  type: string
+                  minLength: 2
+                  maxLength: 2000
+                detail:
+                  type: string
+                  maxLength: 8000
+                evidence:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/EvidenceItemInput'
+      responses:
+        '200':
+          description: 结果已保存
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  # ==================== AI 辅助 ====================
+
+  /ai/suggestions:
+    post:
+      tags: [AI 辅助]
+      operationId: createAISuggestion
+      summary: 请求 AI 建议（只返回建议，不改变业务状态）
+      description: |
+        需要 ai:suggest。四个环节共用：请求必须声明 stage。AI 不可用或超时必须返回
+        503 或 504，且不得阻断人工业务流程。响应中的 suggestion 一律为 pending，
+        必须经人工确认后才能进入业务字段。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AISuggestionRequest'
+      responses:
+        '200':
+          description: 建议已生成
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AISuggestion'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/DependencyFailure'
+
+  /ai/suggestions/{suggestion_id}:
+    parameters:
+      - name: suggestion_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [AI 辅助]
+      operationId: getAISuggestion
+      summary: 查看建议及人工处理状态
+      responses:
+        '200':
+          description: 建议详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AISuggestion'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /ai/suggestions/{suggestion_id}/decision:
+    parameters:
+      - name: suggestion_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [AI 辅助]
+      operationId: decideAISuggestion
+      summary: 人工接受、修改或舍弃 AI 建议
+      description: |
+        需要 ai:suggest。该动作只记录人工处理结果，不直接提交业务对象。接受或修改后
+        suggestion 变为 accepted/edited，并写入 confirmed_by 与 confirmed_at。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AISuggestionDecision'
+      responses:
+        '200':
+          description: 处理结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AISuggestion'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  # ==================== 审计 ====================
+
+  /audit-events:
+    get:
+      tags: [审计]
+      operationId: listAuditEvents
+      summary: 查询审计事件
+      description: 需要 audit:read。普通业务角色默认无此权限，必须在角色上显式授权。
+      parameters:
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+        - name: resource_id
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: request_id
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: actor_user_id
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: result
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/AuditResult'
+        - name: from
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        - name: to
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 审计事件分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventPage'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /audit-events/traces/{request_id}:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [审计]
+      operationId: getAuditTrace
+      summary: 按请求 ID 还原一次跨服务操作链
+      description: 需要 audit:read。用于演示“审计员可从日志还原全过程”。
+      responses:
+        '200':
+          description: 调用链
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditTrace'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ==================== 健康检查 ====================
+
+  /health/live:
+    get:
+      tags: [健康检查]
+      operationId: gatewayLive
+      summary: Gateway 存活检查
+      security: []
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+
+  /health/ready:
+    get:
+      tags: [健康检查]
+      operationId: gatewayReady
+      summary: Gateway 就绪检查（含关键依赖摘要）
+      security: []
+      responses:
+        '200':
+          description: 就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: IAM 签发的访问令牌；业务服务使用公钥独立验签。
+
+  responses:
+    ValidationError:
+      description: 请求结构或业务参数错误
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '../schemas/common.yaml#/components/schemas/Error'
+              - type: object
+                properties:
+                  code:
+                    type: string
+                    enum: [INVALID_REQUEST, VALIDATION_ERROR]
+                  details:
+                    type: object
+                    properties:
+                      issues:
+                        type: array
+                        items:
+                          $ref: '../schemas/common.yaml#/components/schemas/ValidationIssue'
+    Unauthenticated:
+      description: 未登录、令牌无效或过期
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Forbidden:
+      description: 已认证但无权限或资源范围不符
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    NotFound:
+      description: 资源不存在，或按防泄露规则对当前用户不可见
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    Conflict:
+      description: 版本冲突、状态冲突或重复操作
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    DependencyFailure:
+      description: 下游服务失败或超时
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+    ServiceUnavailable:
+      description: 服务未就绪或依赖暂不可用
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorBody'
+
+  schemas:
+    # ---------- 通用 ----------
+
+    ErrorBody:
+      $ref: '../schemas/common.yaml#/components/schemas/Error'
+
+    HealthStatus:
+      type: object
+      required: [status, service, checked_at]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        service:
+          type: string
+        checked_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+          description: 依赖名到简短状态的映射，不包含地址与凭据。
+
+    # ---------- 身份 ----------
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          writeOnly: true
+
+    TokenPair:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+          const: Bearer
+        expires_in:
+          type: integer
+          description: 访问令牌有效期（秒）
+
+    LoginResponse:
+      allOf:
+        - $ref: '#/components/schemas/TokenPair'
+        - type: object
+          required: [user]
+          properties:
+            user:
+              $ref: '#/components/schemas/CurrentUser'
+
+    CurrentUser:
+      type: object
+      required: [id, username, display_name, organization, roles, permissions]
+      properties:
+        id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        username:
+          type: string
+        display_name:
+          type: string
+        organization:
+          $ref: '#/components/schemas/OrganizationRef'
+        roles:
+          type: array
+          items:
+            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        permissions:
+          type: array
+          items:
+            type: string
+          description: 全部有效角色权限的并集，仅用于前端展示，不替代后端校验。
+        active_role_context:
+          $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+
+    OrganizationRef:
+      type: object
+      required: [id, code, name]
+      properties:
+        id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        code:
+          type: string
+        name:
+          type: string
+
+    OrganizationUnit:
+      allOf:
+        - $ref: '#/components/schemas/OrganizationRef'
+        - type: object
+          required: [unit_type, is_active]
+          properties:
+            parent_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            unit_type:
+              type: string
+              enum: [command, staff, recon_team, analysis_team, execution_team]
+            is_active:
+              type: boolean
+
+    Candidate:
+      type: object
+      required: [user_id, display_name, role_code, organization]
+      properties:
+        user_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        display_name:
+          type: string
+        role_code:
+          $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        organization:
+          $ref: '#/components/schemas/OrganizationRef'
+        active_assignment_count:
+          type: integer
+          description: 当前活动任务数，用于决策员选择执行员时参考负载。
+        online:
+          type: boolean
+
+    # ---------- 管理 ----------
+
+    Permission:
+      type: object
+      required: [code, name, domain]
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        domain:
+          type: string
+          enum: [recon, analysis, command, execution, ai, audit, iam, organization]
+
+    Role:
+      type: object
+      required: [id, code, name, is_system, permissions]
+      properties:
+        id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        code:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        is_system:
+          type: boolean
+          description: 四类标准业务角色为 true，不允许删除。
+        permissions:
+          type: array
+          items:
+            type: string
+
+    UserSummary:
+      type: object
+      required: [id, username, display_name, status, organization, roles]
+      properties:
+        id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        username:
+          type: string
+        display_name:
+          type: string
+        status:
+          $ref: '../schemas/common.yaml#/components/schemas/UserStatus'
+        organization:
+          $ref: '#/components/schemas/OrganizationRef'
+        roles:
+          type: array
+          items:
+            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        last_login_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    UserDetail:
+      allOf:
+        - $ref: '#/components/schemas/UserSummary'
+        - type: object
+          properties:
+            permissions:
+              type: array
+              items:
+                type: string
+            role_bindings:
+              type: array
+              items:
+                $ref: '#/components/schemas/UserRoleBinding'
+
+    UserRoleBinding:
+      type: object
+      required: [role_code, granted_at]
+      properties:
+        role_code:
+          $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        granted_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        granted_by:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        expires_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    CreateUserRequest:
+      type: object
+      required: [username, password, display_name, organization_id, role_codes]
+      properties:
+        username:
+          type: string
+          minLength: 3
+          maxLength: 64
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          writeOnly: true
+        display_name:
+          type: string
+          maxLength: 64
+        organization_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        role_codes:
+          type: array
+          minItems: 1
+          items:
+            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        display_name:
+          type: string
+          maxLength: 64
+        organization_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        status:
+          $ref: '../schemas/common.yaml#/components/schemas/UserStatus'
+        new_password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          writeOnly: true
+
+    UserPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserSummary'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    # ---------- 侦察 ----------
+
+    EvidenceItemInput:
+      type: object
+      required: [file_name, media_type, sha256]
+      properties:
+        file_name:
+          type: string
+          maxLength: 255
+        media_type:
+          type: string
+          maxLength: 127
+        size_bytes:
+          type: integer
+          minimum: 0
+        sha256:
+          type: string
+          pattern: '^[a-f0-9]{64}$'
+
+    EvidenceItem:
+      allOf:
+        - $ref: '#/components/schemas/EvidenceItemInput'
+        - type: object
+          required: [id, storage_ref, created_at]
+          properties:
+            id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            storage_ref:
+              type: string
+              description: 受控存储引用，不返回真实绝对路径。
+            created_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            created_by:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+
+    ReconRecordWrite:
+      type: object
+      required: [title, source_type, content, credibility, priority]
+      properties:
+        title:
+          type: string
+          minLength: 2
+          maxLength: 200
+        source_type:
+          type: string
+          enum: [osint, sensor, report, document, other]
+        source_ref:
+          type: string
+          maxLength: 500
+          description: 来源说明或脱敏后的引用地址，不得写入真实敏感地址。
+        content:
+          type: string
+          minLength: 10
+          maxLength: 8000
+        credibility:
+          $ref: '../schemas/common.yaml#/components/schemas/Credibility'
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceItemInput'
+
+    ReconRecordPatch:
+      type: object
+      required: [expected_version]
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+          minLength: 2
+          maxLength: 200
+        source_type:
+          type: string
+          enum: [osint, sensor, report, document, other]
+        source_ref:
+          type: string
+          maxLength: 500
+        content:
+          type: string
+          minLength: 10
+          maxLength: 8000
+        credibility:
+          $ref: '../schemas/common.yaml#/components/schemas/Credibility'
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+
+    ReconAssignment:
+      type: object
+      required: [id, analyst_id, status, assigned_at]
+      properties:
+        id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        analyst_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        status:
+          type: string
+          enum: [pending, in_progress, completed, rejected]
+        assigned_by:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        assigned_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        responded_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        reject_reason:
+          type: string
+
+    ReconRecord:
+      description: 侦察记录。提交后不可用普通编辑接口修改。
+      allOf:
+        - $ref: '../schemas/common.yaml#/components/schemas/AuditFields'
+        - $ref: '../schemas/common.yaml#/components/schemas/VersionedResource'
+        - type: object
+          required:
+            - id
+            - record_no
+            - title
+            - status
+            - credibility
+            - priority
+            - owner_id
+            - organization
+          properties:
+            id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            record_no:
+              type: string
+              description: 人可读编号，例如 REC-20261016-0001
+            title:
+              type: string
+            source_type:
+              type: string
+            source_ref:
+              type: string
+            content:
+              type: string
+            status:
+              $ref: '../schemas/common.yaml#/components/schemas/ReconStatus'
+            credibility:
+              $ref: '../schemas/common.yaml#/components/schemas/Credibility'
+            priority:
+              $ref: '../schemas/common.yaml#/components/schemas/Priority'
+            owner_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            organization:
+              $ref: '#/components/schemas/OrganizationRef'
+            assignments:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReconAssignment'
+            evidence:
+              type: array
+              items:
+                $ref: '#/components/schemas/EvidenceItem'
+            submitted_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    ReconRecordPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconRecord'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    # ---------- 分析 ----------
+
+    ReconLink:
+      type: object
+      required: [recon_record_id, recon_title_snapshot]
+      properties:
+        recon_record_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        recon_title_snapshot:
+          type: string
+          description: 提交时保存的不可变标题快照，避免跨服务实时读取。
+        recon_owner_snapshot:
+          type: string
+        linked_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    AnalysisReportWrite:
+      type: object
+      required:
+        - title
+        - recon_record_ids
+        - key_findings
+        - risk_level
+        - recommended_actions
+        - priority
+      properties:
+        title:
+          type: string
+          minLength: 2
+          maxLength: 200
+        recon_record_ids:
+          type: array
+          minItems: 1
+          items:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        key_findings:
+          type: string
+          minLength: 10
+          maxLength: 8000
+        relations:
+          type: string
+          maxLength: 8000
+          description: 关键信息之间的关联关系说明。
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+        recommended_actions:
+          type: string
+          minLength: 2
+          maxLength: 4000
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+
+    AnalysisReportPatch:
+      type: object
+      required: [expected_version]
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+          description: 乐观锁版本号
+        title:
+          type: string
+          maxLength: 200
+        key_findings:
+          type: string
+          maxLength: 8000
+        relations:
+          type: string
+          maxLength: 8000
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+        recommended_actions:
+          type: string
+          maxLength: 4000
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+
+    AnalysisReport:
+      allOf:
+        - $ref: '../schemas/common.yaml#/components/schemas/AuditFields'
+        - $ref: '../schemas/common.yaml#/components/schemas/VersionedResource'
+        - $ref: '../schemas/common.yaml#/components/schemas/HumanConfirmation'
+        - type: object
+          required:
+            - id
+            - report_no
+            - title
+            - status
+            - author_id
+            - recon_links
+            - priority
+          properties:
+            id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            report_no:
+              type: string
+            title:
+              type: string
+            status:
+              $ref: '../schemas/common.yaml#/components/schemas/ReportStatus'
+            author_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            recon_links:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReconLink'
+            key_findings:
+              type: string
+            relations:
+              type: string
+            risk_level:
+              type: string
+            recommended_actions:
+              type: string
+            priority:
+              $ref: '../schemas/common.yaml#/components/schemas/Priority'
+            ai_content_confirmed:
+              type: boolean
+              description: 表示报告中的 AI 建议已全部接受、修改或舍弃。
+            decision_maker_ids:
+              type: array
+              items:
+                $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            submitted_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    AnalysisReportPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AnalysisReport'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    # ---------- 决策 ----------
+
+    CommandWrite:
+      type: object
+      required: [title, objective, content, priority, source_report_id]
+      properties:
+        title:
+          type: string
+          minLength: 2
+          maxLength: 200
+        objective:
+          type: string
+          minLength: 2
+          maxLength: 500
+        content:
+          type: string
+          minLength: 10
+          maxLength: 8000
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+        deadline:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        source_report_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+
+    CommandPatch:
+      type: object
+      required: [expected_version]
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+          description: 乐观锁版本号
+        title:
+          type: string
+          maxLength: 200
+        objective:
+          type: string
+          maxLength: 500
+        content:
+          type: string
+          maxLength: 8000
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+        deadline:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    CommandAssignmentSummary:
+      type: object
+      required: [executor_id, status]
+      properties:
+        executor_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        assignment_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        status:
+          $ref: '../schemas/common.yaml#/components/schemas/AssignmentStatus'
+        accepted_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        completed_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    Command:
+      allOf:
+        - $ref: '../schemas/common.yaml#/components/schemas/AuditFields'
+        - $ref: '../schemas/common.yaml#/components/schemas/VersionedResource'
+        - type: object
+          required:
+            - id
+            - command_no
+            - title
+            - status
+            - priority
+            - decision_maker_id
+            - source_report_id
+          properties:
+            id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            command_no:
+              type: string
+            title:
+              type: string
+            objective:
+              type: string
+            content:
+              type: string
+            status:
+              $ref: '../schemas/common.yaml#/components/schemas/CommandStatus'
+            priority:
+              $ref: '../schemas/common.yaml#/components/schemas/Priority'
+            deadline:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            decision_maker_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            source_report_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            assignments:
+              type: array
+              items:
+                $ref: '#/components/schemas/CommandAssignmentSummary'
+            issued_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            cancelled_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            cancel_reason:
+              type: string
+
+    CommandPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Command'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    ConflictCheckResult:
+      type: object
+      required: [has_conflict, conflicts]
+      properties:
+        has_conflict:
+          type: boolean
+        conflicts:
+          type: array
+          items:
+            type: object
+            required: [command_id, command_no, status, created_at]
+            properties:
+              command_id:
+                $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+              command_no:
+                type: string
+              status:
+                $ref: '../schemas/common.yaml#/components/schemas/CommandStatus'
+              created_at:
+                $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+              reason:
+                type: string
+                description: 冲突原因摘要，例如同一目标已有活动指令。
+
+    CommandStatusView:
+      type: object
+      required: [command_id, status, assignments]
+      properties:
+        command_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        status:
+          $ref: '../schemas/common.yaml#/components/schemas/CommandStatus'
+        assignments:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommandAssignmentSummary'
+        updated_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    # ---------- 执行 ----------
+
+    Assignment:
+      allOf:
+        - $ref: '../schemas/common.yaml#/components/schemas/AuditFields'
+        - $ref: '../schemas/common.yaml#/components/schemas/VersionedResource'
+        - type: object
+          required:
+            - id
+            - command_id
+            - executor_id
+            - status
+            - command_title_snapshot
+          properties:
+            id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            command_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            command_title_snapshot:
+              type: string
+              description: 下达时保存的指令标题快照，执行员据此识别任务。
+            command_content_snapshot:
+              type: string
+            priority:
+              $ref: '../schemas/common.yaml#/components/schemas/Priority'
+            deadline:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            executor_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            status:
+              $ref: '../schemas/common.yaml#/components/schemas/AssignmentStatus'
+            accepted_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            started_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            completed_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            reject_reason:
+              type: string
+            result:
+              $ref: '#/components/schemas/ExecutionResult'
+
+    ExecutionResult:
+      type: object
+      required: [outcome, summary, reported_at]
+      properties:
+        outcome:
+          $ref: '../schemas/common.yaml#/components/schemas/AssignmentOutcome'
+        summary:
+          type: string
+        detail:
+          type: string
+        reported_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        reported_by:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        evidence:
+          type: array
+          items:
+            $ref: '#/components/schemas/EvidenceItem'
+
+    AssignmentPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Assignment'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    # ---------- AI ----------
+
+    AISuggestionRequest:
+      type: object
+      required: [stage, business_object_type, business_object_id, suggestion_type]
+      properties:
+        stage:
+          $ref: '../schemas/common.yaml#/components/schemas/AIStage'
+        business_object_type:
+          type: string
+          enum: [recon_record, analysis_report, command, assignment]
+        business_object_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        suggestion_type:
+          type: string
+          enum:
+            - summary
+            - classification
+            - missing_field_hint
+            - entity_relation
+            - risk_assessment
+            - action_options
+            - conflict_hint
+            - command_draft
+            - execution_checklist
+            - result_summary
+        extra_context:
+          type: object
+          additionalProperties: true
+          description: 可选补充上下文；不得包含密码、Token 或超出用户权限的数据。
+
+    AISuggestion:
+      type: object
+      required:
+        - id
+        - stage
+        - suggestion_type
+        - content
+        - status
+        - model_name
+        - created_at
+      properties:
+        id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        stage:
+          $ref: '../schemas/common.yaml#/components/schemas/AIStage'
+        business_object_type:
+          type: string
+        business_object_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        suggestion_type:
+          type: string
+        content:
+          type: object
+          additionalProperties: true
+          description: 结构化建议内容；未经人工确认不得写入业务字段。
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        source_refs:
+          type: array
+          items:
+            type: string
+        model_name:
+          type: string
+        model_version:
+          type: string
+        status:
+          $ref: '../schemas/common.yaml#/components/schemas/AISuggestionStatus'
+        human_confirmed_by:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        human_confirmed_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        edited_content:
+          type: object
+          additionalProperties: true
+          description: 人工修改后的最终内容，仅当 status 为 edited 时存在。
+        created_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    AISuggestionDecision:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [accepted, edited, rejected]
+        edited_content:
+          type: object
+          additionalProperties: true
+          description: decision 为 edited 时必填，表示人工修改后的最终内容。
+        note:
+          type: string
+          maxLength: 500
+
+    # ---------- 审计 ----------
+
+    AuditEvent:
+      type: object
+      required:
+        - id
+        - request_id
+        - occurred_at
+        - service
+        - event_type
+        - action
+        - result
+      properties:
+        id:
+          type: string
+          description: 审计事件 ID，单调递增字符串，不允许业务修改。
+        request_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        occurred_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        service:
+          type: string
+          description: 产生事件的服务名，例如 recon-service。
+        event_type:
+          $ref: '../schemas/common.yaml#/components/schemas/AuditEventType'
+        actor_user_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        actor_role:
+          $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        action:
+          type: string
+          description: 稳定动作名，例如 recon_record.submit。
+        resource_type:
+          type: string
+        resource_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        result:
+          $ref: '../schemas/common.yaml#/components/schemas/AuditResult'
+        error_code:
+          type: string
+        source_ip:
+          type: string
+          description: 调用来源 IP，仅用于审计与排障。
+        details:
+          type: object
+          additionalProperties: true
+          description: 结构化补充信息，禁止包含密码、Token、完整敏感正文。
+
+    AuditEventPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    AuditTrace:
+      type: object
+      required: [request_id, started_at, outcome, events]
+      properties:
+        request_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        started_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        completed_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        outcome:
+          $ref: '../schemas/common.yaml#/components/schemas/AuditResult'
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
