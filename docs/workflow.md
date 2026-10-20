@@ -1,37 +1,43 @@
 # 业务状态机与冲突处理
 
-版本：0.1（基线候选）
+版本：0.2（SOA 基线）
 
 ## 1. 通用规则
 
 - 状态转换由后端在事务中校验和写入，成功后记录审计。
 - 每个可编辑业务对象携带 `version`；客户端更新时提交版本，旧版本返回 `409 VERSION_CONFLICT`。
 - 关键提交操作支持幂等键或等价去重机制；网络重试不得创建重复对象。
+- 跨服务操作使用 `submitting`、`issuing` 等中间状态；只有全部必需步骤成功才进入完成状态。
+- 下游失败且无法自动恢复时进入 `compensation_required`，不得向用户显示为提交成功。
 - AI 生成不会直接改变业务状态。只有用户查看并人工确认后，AI 内容才能进入待提交字段。
 - 非法转换返回 `409 WORKFLOW_CONFLICT`，无权限返回 `403 FORBIDDEN`。
 
 ## 2. 侦察记录
 
-状态：`draft`、`submitted`、`assigned`、`under_analysis`、`analyzed`、`rejected`。
+状态：`draft`、`submitting`、`assigned`、`under_analysis`、`analyzed`、`rejected`、`compensation_required`。
 
 | 当前状态 | 动作 | 操作者 | 下一状态 | 约束 |
 |---|---|---|---|---|
 | - | 创建 | 侦察员 | `draft` | 创建者为所有者 |
 | `draft` | 保存/AI建议/人工确认 | 创建者 | `draft` | 版本匹配 |
-| `draft` | 提交并选择分析员 | 创建者 | `assigned` | 必填项完整，至少一名合理候选人 |
+| `draft` | 提交并选择分析员 | 创建者 | `submitting` | 必填项完整，至少一名合理候选人，携带幂等键 |
+| `submitting` | IAM 校验与指派成功 | Coordinator/侦察服务 | `assigned` | 所有必需步骤成功并记录审计 |
+| `submitting` | 下游持续失败 | Coordinator | `compensation_required` | 保留请求 ID 和失败步骤，允许授权用户重试/取消 |
 | `assigned` | 开始分析 | 被指派分析员 | `under_analysis` | 建立个人处理记录 |
 | `under_analysis` | 提交相关报告 | 分析员 | `analyzed` 或保持 `under_analysis` | 多分析员时全部完成才汇总为 `analyzed` |
 | `assigned`/`under_analysis` | 拒绝处理 | 被指派分析员 | `rejected` 或保持原状态 | 必须填写理由；多分析员各自独立 |
 
 ## 3. 分析报告
 
-状态：`draft`、`submitted`、`assigned`、`under_decision`、`decided`、`rejected`。
+状态：`draft`、`submitting`、`assigned`、`under_decision`、`decided`、`rejected`、`compensation_required`。
 
 | 当前状态 | 动作 | 操作者 | 下一状态 | 约束 |
 |---|---|---|---|---|
 | - | 创建 | 分析员 | `draft` | 至少关联一条授权侦察记录 |
 | `draft` | 保存/AI建议/人工确认 | 创建者 | `draft` | 版本匹配 |
-| `draft` | 提交并选择决策员 | 创建者 | `assigned` | 报告完整且 AI 内容已经人工确认或明确舍弃 |
+| `draft` | 提交并选择决策员 | 创建者 | `submitting` | 报告完整，AI 内容已确认/舍弃，携带幂等键 |
+| `submitting` | 校验与指派成功 | Coordinator/分析服务 | `assigned` | 所有必需步骤成功并记录审计 |
+| `submitting` | 下游持续失败 | Coordinator | `compensation_required` | 可重试或取消，不显示为已提交 |
 | `assigned` | 开始决策 | 被指派决策员 | `under_decision` | 建立个人处理记录 |
 | `under_decision` | 基于报告下达指令 | 决策员 | `decided` | 至少有一条成功下达的指令 |
 | `assigned`/`under_decision` | 退回 | 被指派决策员 | `rejected` | 必须填写理由；新修改采用新版本/明确重开流程 |
@@ -40,13 +46,15 @@
 
 ## 4. 决策指令
 
-状态：`draft`、`issued`、`partially_accepted`、`accepted`、`executing`、`partially_completed`、`completed`、`failed`、`rejected`、`cancelled`。
+状态：`draft`、`issuing`、`issued`、`partially_accepted`、`accepted`、`executing`、`partially_completed`、`completed`、`failed`、`rejected`、`cancelled`、`compensation_required`。
 
 | 当前状态 | 动作 | 操作者 | 下一状态 | 约束 |
 |---|---|---|---|---|
 | - | 创建 | 决策员 | `draft` | 关联授权报告 |
 | `draft` | 编辑/AI建议/确认 | 创建者 | `draft` | 版本匹配 |
-| `draft` | 下达 | 创建者 | `issued` | 至少一个合理执行员；冲突检查完成；二次确认 |
+| `draft` | 下达 | 创建者 | `issuing` | 至少一个合理执行员；冲突检查完成；二次确认；携带幂等键 |
+| `issuing` | 全部个人分配创建成功 | Coordinator/决策服务 | `issued` | Execution Service 返回完整分配结果 |
+| `issuing` | 分配创建持续失败 | Coordinator | `compensation_required` | 不显示为已下达；允许重试或取消 |
 | `issued` | 接收 | 被指派执行员 | `partially_accepted`/`accepted` | 更新个人分配状态 |
 | `issued`/`partially_accepted` | 拒绝 | 被指派执行员 | `rejected` 或保持活动状态 | 必须填写理由；总体状态由所有分配汇总 |
 | `accepted`/`partially_accepted` | 开始执行 | 已接收执行员 | `executing` | 仅更新本人分配状态 |
@@ -105,3 +113,11 @@
 - `AI 请求`、`人工确认`、`正式提交`是三个不同事件，分别审计。
 - AI 超时或不可用只影响建议功能，不阻断人工创建和提交。
 - AI 内容未经确认不得驱动状态转换、用户指派或指令下达。
+
+## 8. SOA 补偿规则
+
+- Coordinator 只重试契约声明为幂等的步骤，最多执行配置的有限次数。
+- 补偿重试必须复用原 `X-Request-ID` 和 `Idempotency-Key`。
+- `compensation_required` 对业务用户显示为“提交未完成，需要重试或取消”，不能显示为成功。
+- 取消补偿不能删除已存在的审计和下游记录；下游孤立记录按状态停用或标记取消。
+- 每个服务对自己的状态负责，Coordinator 不直接写服务 Schema。

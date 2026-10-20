@@ -18,6 +18,11 @@
 | TC-B13 AI + 人在回路 | FR-RECON-002、FR-ANALYSIS-003、FR-DECISION-002、FR-EXEC-003、NFR-AI-001 | workflow §7 | A、B、C | 四环节建议、确认、降级 | 设计中 |
 | TC-B14 多角色多用户调度 | FR-AUTH-004、FR-ORG-002 | rbac §4~§5 | A、B、C | 同角色多账号选择与并行流转 | 设计中 |
 | TC-B15 组织候选筛选 | FR-ORG-001~002 | rbac §4 | A、B、C | 组织匹配/不匹配候选列表 | 设计中 |
+| TC-SOA01 Gateway 唯一入口 | NFR-SOA-001 | architecture §11、soa-deployment | B、D | 外网只能访问 Gateway，内部端口拒绝 | 设计中 |
+| TC-SOA02 服务契约与边界 | NFR-SOA-002 | service-catalog、service-contracts | A、B | OpenAPI 与契约测试 | 设计中 |
+| TC-SOA03 Schema 数据所有权 | NFR-SOA-003 | data-ownership | B、D | 数据库账号跨 Schema 写入拒绝 | 设计中 |
+| TC-SOA04 请求追踪与幂等 | NFR-SOA-004 | service-contracts、workflow | A、B | 重复提交和跨服务失败测试 | 设计中 |
+| TC-SOA05 独立健康检查与部署 | NFR-SOA-005 | service-catalog、soa-deployment | B、D | Compose、健康检查与单服务故障测试 | 设计中 |
 | TC-E01 数据安全 | NFR-SEC-001~003、FR-BACKUP-001 | architecture §6~§7 | B、D | 哈希、访问限制、备份恢复 | 设计中 |
 | TC-E02 软件工程管理 | NFR-MAINT-001 | CONTRIBUTING、任务清单 | A、全员 | 仓库、PR、文档和追踪记录 | 实现中 |
 | TC-E03 优先级 | FR-PRIORITY-001 | requirements §3.6 | B、C | 普通/紧急保存、排序和展示 | 设计中 |
