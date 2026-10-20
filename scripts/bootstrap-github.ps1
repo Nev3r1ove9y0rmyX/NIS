@@ -1,253 +1,413 @@
+﻿#requires -Version 5.1
+<#
+.SYNOPSIS
+    按 scripts/github/plan.json 同步 GitHub 的 Label、Milestone 与 Issue，可选创建 PR。
+
+.DESCRIPTION
+    幂等脚本：重复执行不会产生重复的 Label、Milestone 或 Issue。
+    令牌从 Git 凭据管理器读取（与 git push 使用同一凭据），不接受命令行明文令牌。
+    兼容 Windows PowerShell 5.1 与 PowerShell 7。
+
+.PARAMETER Owner
+    仓库所有者，默认 Nev3r1ove9y0rmyX。
+
+.PARAMETER Repository
+    仓库名，默认 NIS。
+
+.PARAMETER PlanPath
+    计划文件路径，默认 scripts/github/plan.json。
+
+.PARAMETER CreatePr
+    额外创建当前分支 -> develop 的 PR（已存在则跳过）。
+
+.PARAMETER SkipProject
+    跳过 GitHub Project 看板创建。
+
+.PARAMETER DryRun
+    只校验计划文件并打印，不访问 GitHub。
+
+.EXAMPLE
+    powershell -File scripts/bootstrap-github.ps1
+    # 只看会做什么，不真正写：
+    powershell -File scripts/bootstrap-github.ps1 -DryRun
+#>
+[CmdletBinding()]
 param(
     [string]$Owner = "Nev3r1ove9y0rmyX",
-    [string]$Repository = "NIS"
+    [string]$Repository = "NIS",
+    [string]$PlanPath = "",
+    [switch]$CreatePr,
+    [switch]$SkipProject,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
 
-$credentialLines = ("protocol=https`nhost=github.com`n`n" | git credential fill)
-$credential = @{}
-foreach ($line in $credentialLines) {
-    $parts = $line -split "=", 2
-    if ($parts.Count -eq 2) {
-        $credential[$parts[0]] = $parts[1]
+# $PSScriptRoot 在 param 默认值里不保证可用（PowerShell 5.1），这里显式解析。
+if ([string]::IsNullOrWhiteSpace($PlanPath)) {
+    $PlanPath = Join-Path $PSScriptRoot "github/plan.json"
+}
+
+# Windows PowerShell 5.1 默认可能不启用 TLS 1.2，api.github.com 需要它。
+try {
+    [Net.ServicePointManager]::SecurityProtocol = `
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+}
+catch {
+    Write-Verbose "无法设置 TLS 1.2，继续尝试。"
+}
+
+function Get-GitHubToken {
+    $lines = ("protocol=https`nhost=github.com`n`n" | git credential fill) 2>$null
+    if ($LASTEXITCODE -ne 0) { throw "无法从 Git 凭据管理器读取 GitHub 凭据。" }
+    foreach ($line in $lines) {
+        if ($line -match '^password=(.+)$') { return $Matches[1] }
     }
+    throw "凭据中没有 password 字段，请先完成一次 git push 或 gh auth login。"
 }
 
-if (-not $credential.password) {
-    throw "GitHub credential is unavailable from Git Credential Manager."
-}
-
+$token = Get-GitHubToken
 $headers = @{
-    Authorization           = "Bearer $($credential.password)"
-    Accept                  = "application/vnd.github+json"
+    Authorization          = "Bearer $token"
+    Accept                 = "application/vnd.github+json"
     "X-GitHub-Api-Version" = "2022-11-28"
-    "User-Agent"            = "NIS-project-bootstrap"
+    "User-Agent"           = "NIS-bootstrap"
 }
 $api = "https://api.github.com/repos/$Owner/$Repository"
+$warnings = New-Object 'System.Collections.Generic.List[string]'
 
-$labelSpecs = @(
-    @{ name = "A"; color = "1D76DB"; description = "成员 A：需求、架构、集成" },
-    @{ name = "B"; color = "0E8A16"; description = "成员 B：后端、数据库、审计" },
-    @{ name = "C"; color = "FBCA04"; description = "成员 C：前端、交互" },
-    @{ name = "D"; color = "D93F0B"; description = "成员 D：网络、部署、测试" },
-    @{ name = "P0"; color = "B60205"; description = "基础验收阻塞项" },
-    @{ name = "P1"; color = "D93F0B"; description = "重要扩展或质量任务" },
-    @{ name = "P2"; color = "FBCA04"; description = "基础验收后处理" },
-    @{ name = "frontend"; color = "C5DEF5"; description = "前端" },
-    @{ name = "backend"; color = "BFDADC"; description = "后端" },
-    @{ name = "network"; color = "5319E7"; description = "网络与部署" },
-    @{ name = "docs"; color = "0075CA"; description = "文档" },
-    @{ name = "test"; color = "0E8A16"; description = "测试" },
-    @{ name = "blocked"; color = "000000"; description = "存在阻塞" }
-)
-
-$existingLabels = @(Invoke-RestMethod -Headers $headers -Uri "$api/labels?per_page=100")
-foreach ($spec in $labelSpecs) {
-    if (-not ($existingLabels | Where-Object name -eq $spec.name)) {
-        Invoke-RestMethod -Method Post -Headers $headers -Uri "$api/labels" `
-            -Body ($spec | ConvertTo-Json) -ContentType "application/json" | Out-Null
-    }
+function ConvertTo-Utf8Json {
+    param($Value, [int]$Depth = 10)
+    $json = $Value | ConvertTo-Json -Depth $Depth
+    # 显式转成 UTF-8 字节，避免 Windows PowerShell 5.1 按本地代码页发送中文。
+    return , ([System.Text.Encoding]::UTF8.GetBytes($json))
 }
 
-$milestoneTitles = @(
-    "M0-项目初始化",
-    "M1-需求与设计",
-    "M2-后端与数据库",
-    "M3-前端工作台",
-    "M4-网络部署",
-    "M5-联调与中期验收",
-    "M6-系统加固与对抗演练"
-)
-
-$milestones = @(Invoke-RestMethod -Headers $headers -Uri "$api/milestones?state=all&per_page=100")
-foreach ($title in $milestoneTitles) {
-    if (-not ($milestones | Where-Object title -eq $title)) {
-        $body = @{ title = $title; description = "NIS $title 阶段交付" } | ConvertTo-Json
-        Invoke-RestMethod -Method Post -Headers $headers -Uri "$api/milestones" `
-            -Body $body -ContentType "application/json" | Out-Null
+function Invoke-GitHub {
+    param(
+        [string]$Method = "GET",
+        [string]$Uri,
+        $Body
+    )
+    $params = @{ Method = $Method; Headers = $headers; Uri = $Uri }
+    if ($null -ne $Body) {
+        $params.Body = ConvertTo-Utf8Json -Value $Body
+        $params.ContentType = "application/json; charset=utf-8"
     }
+    return Invoke-RestMethod @params
 }
-$milestones = @(Invoke-RestMethod -Headers $headers -Uri "$api/milestones?state=all&per_page=100")
 
-$issueSpecs = @(
-    @{
-        title     = "[A][P0] 评审并冻结需求与架构基线"
-        labels    = @("A", "P0", "docs")
-        milestone = "M1-需求与设计"
-        body      = @"
-## 目标
-组织全员评审并冻结第一版需求、RBAC、状态机、总体架构和验收追踪基线。
-
-## 负责人
-主责：A；协作：B、C、D
-
-## 实现范围
-- 评审 docs/course-requirements-checklist.md
-- 评审 docs/requirements.md、docs/rbac.md、docs/workflow.md
-- 评审 docs/architecture.md 和三份 ADR
-- 与 B 对齐实体/状态/权限/错误码，与 C 对齐页面动作，与 D 对齐 DMZ 部署
-- 记录意见、风险、决策和未决问题
-
-## 验收标准
-- [ ] 四名成员均留下评审结论
-- [ ] P0 规则无已知矛盾
-- [ ] ADR-001 至 ADR-003 被接受或有替代决议
-- [ ] B/C/D 能据此开始实现
-- [ ] 追踪矩阵与评审结果同步
-
-## 参考
-docs/sprint-01.md
-"@
-    },
-    @{
-        title     = "[B][P0] 后端骨架、IAM 数据模型与侦察 API"
-        labels    = @("B", "P0", "backend", "test")
-        milestone = "M2-后端与数据库"
-        body      = @"
-## 目标
-交付可迁移、可测试的后端最小切片：登录、RBAC 基础模型、侦察提交和授权查询。
-
-## 负责人
-主责：B；评审：A；联调：C、D
-
-## 实现范围
-- FastAPI、SQLAlchemy、Alembic、MySQL、pytest
-- User/Role/Permission 多对多和 OrganizationUnit
-- 登录、当前用户及角色权限响应
-- 侦察记录草稿、提交、分析员授权列表
-- ER 图、OpenAPI、种子数据和审计基础
-
-## 验收标准
-- [ ] 新环境可迁移数据库并创建四类演示账号
-- [ ] 密码不明文保存，合法/非法登录结果正确
-- [ ] 侦察员可提交；越权调用被后端拒绝
-- [ ] 被指派分析员可查询，其他分析员不可读取
-- [ ] 正常、未认证、越权、非法参数测试通过
-
-## 依赖
-A 的需求/RBAC/状态机基线评审。
-"@
-    },
-    @{
-        title     = "[C][P0] 前端骨架、登录与侦察工作台"
-        labels    = @("C", "P0", "frontend", "test")
-        milestone = "M3-前端工作台"
-        body      = @"
-## 目标
-交付连接真实 API 的前端最小切片：登录、角色展示、侦察提交和分析员授权列表。
-
-## 负责人
-主责：C；评审：A；联调：B
-
-## 实现范围
-- Vue 3、Vite、TypeScript、Router、API client
-- 登录、当前用户/角色、权限路由
-- 侦察列表、新建、草稿、提交
-- 分析员被指派记录只读列表
-- 加载、空数据及 401/403/422/500 状态
-
-## 验收标准
-- [ ] 四类账号角色展示正确，无权限路由被拦截
-- [ ] 侦察员通过真实 API 提交，失败时输入不丢失
-- [ ] 分析员查询被指派记录
-- [ ] 不用静态数据冒充最终联调
-- [ ] lint、typecheck、test、build 通过
-
-## 依赖
-B 提供经评审的 OpenAPI；临时 mock 必须与契约一致且可切换。
-"@
-    },
-    @{
-        title     = "[D][P0] 三域网络最小环境与访问验证"
-        labels    = @("D", "P0", "network", "test")
-        milestone = "M4-网络部署"
-        body      = @"
-## 目标
-实际建立外网、信任内网、DMZ 三个区域，并用测试证据证明允许和拒绝路径。
-
-## 负责人
-主责：D；评审：A；协作：B、C
-
-## 实现范围
-- 盘点四台电脑、网卡、内存、虚拟化软件和交换设备
-- 固化 IP、网关、接口和节点表
-- 创建 iKuai/等价软路由及三网段
-- 在 DMZ 预留 Web/API 与中心数据库节点
-- 数据库不映射外网，DMZ 到内网全部拒绝
-- 保存配置步骤、日志和脱敏证据
-
-## 验收标准
-- [ ] 三个区域使用不同网段
-- [ ] 内网访问外网和 DMZ 测试服务成功
-- [ ] 外网访问映射后的 DMZ 服务成功
-- [ ] DMZ 访问内网测试服务失败且有防火墙日志
-- [ ] 另一名成员可依据文档复查配置
-
-## 依赖
-docs/architecture.md、ADR-002 和 docs/network-lab-plan.md。
-"@
+function Invoke-GraphQL {
+    param([string]$Query, [hashtable]$Variables)
+    $payload = @{ query = $Query; variables = $Variables }
+    $response = Invoke-RestMethod -Method Post -Headers $headers `
+        -Uri "https://api.github.com/graphql" `
+        -Body (ConvertTo-Utf8Json -Value $payload) -ContentType "application/json; charset=utf-8"
+    if ($response.errors) {
+        throw ($response.errors | ForEach-Object { $_.message } | Out-String)
     }
-)
+    return $response.data
+}
 
-$allIssues = @(Invoke-RestMethod -Headers $headers -Uri "$api/issues?state=all&per_page=100")
-$createdIssues = @()
-foreach ($spec in $issueSpecs) {
-    $existing = $allIssues | Where-Object { $_.title -eq $spec.title -and -not $_.pull_request } | Select-Object -First 1
-    if ($existing) {
-        $createdIssues += $existing
+function Get-AllPages {
+    param([string]$Uri)
+    $items = @()
+    $page = 1
+    while ($true) {
+        $separator = if ($Uri.Contains("?")) { "&" } else { "?" }
+        $batch = @(Invoke-GitHub -Uri "$Uri${separator}per_page=100&page=$page")
+        $items += $batch
+        if ($batch.Count -lt 100) { break }
+        $page++
+    }
+    return $items
+}
+
+# ---------------- 读取计划 ----------------
+
+if (-not (Test-Path $PlanPath)) { throw "找不到计划文件：$PlanPath" }
+$plan = Get-Content -Raw -Encoding utf8 $PlanPath | ConvertFrom-Json
+Write-Output "计划文件：$PlanPath"
+Write-Output ("  标签 {0} 个 / 里程碑 {1} 个 / Issue {2} 个" -f $plan.labels.Count, $plan.milestones.Count, $plan.issues.Count)
+
+if ($DryRun) {
+    Write-Output "[DryRun] 仅检查计划文件，不访问 GitHub。"
+    foreach ($issue in $plan.issues) {
+        Write-Output ("  - [{0}] {1} -> {2}" -f $issue.state, $issue.title, $issue.milestone)
+    }
+    return
+}
+
+# ---------------- 标签 ----------------
+
+$existingLabels = Get-AllPages -Uri "$api/labels"
+$labelIndex = @{}
+foreach ($label in $existingLabels) { $labelIndex[$label.name] = $label }
+
+$createdLabels = 0
+$updatedLabels = 0
+foreach ($spec in $plan.labels) {
+    if ($labelIndex.ContainsKey($spec.name)) {
+        $current = $labelIndex[$spec.name]
+        if ($current.color -ne $spec.color -or $current.description -ne $spec.description) {
+            Invoke-GitHub -Method Patch -Uri "$api/labels/$([uri]::EscapeDataString($spec.name))" `
+                -Body @{ color = $spec.color; description = $spec.description } | Out-Null
+            $updatedLabels++
+        }
         continue
     }
+    Invoke-GitHub -Method Post -Uri "$api/labels" `
+        -Body @{ name = $spec.name; color = $spec.color; description = $spec.description } | Out-Null
+    $createdLabels++
+}
+Write-Output "标签：新建 $createdLabels，更新 $updatedLabels，已存在 $($plan.labels.Count - $createdLabels - $updatedLabels)"
 
-    $milestone = $milestones | Where-Object title -eq $spec.milestone | Select-Object -First 1
-    $payload = @{
-        title     = $spec.title
-        body      = $spec.body
-        labels    = $spec.labels
-        milestone = $milestone.number
-    } | ConvertTo-Json -Depth 5
+# ---------------- 里程碑 ----------------
 
-    $createdIssues += Invoke-RestMethod -Method Post -Headers $headers -Uri "$api/issues" `
-        -Body $payload -ContentType "application/json"
+$existingMilestones = Get-AllPages -Uri "$api/milestones?state=all"
+$milestoneIndex = @{}
+foreach ($milestone in $existingMilestones) { $milestoneIndex[$milestone.title] = $milestone }
+
+$createdMilestones = 0
+foreach ($spec in $plan.milestones) {
+    if ($milestoneIndex.ContainsKey($spec.title)) { continue }
+    $created = Invoke-GitHub -Method Post -Uri "$api/milestones" `
+        -Body @{ title = $spec.title; description = $spec.description }
+    $milestoneIndex[$spec.title] = $created
+    $createdMilestones++
+}
+Write-Output "里程碑：新建 $createdMilestones，已存在 $($plan.milestones.Count - $createdMilestones)"
+
+# ---------------- Issue ----------------
+
+$existingIssues = Get-AllPages -Uri "$api/issues?state=all"
+$issueIndex = @{}
+foreach ($issue in $existingIssues) {
+    if ($issue.pull_request) { continue }
+    $issueIndex[$issue.title] = $issue
 }
 
-$aIssue = $createdIssues | Where-Object title -like "[[]A[]]*" | Select-Object -First 1
-$pulls = @(Invoke-RestMethod -Headers $headers -Uri "$api/pulls?state=open&head=${Owner}:docs/a-requirements-architecture")
-if ($pulls.Count -eq 0) {
-    $prBody = @"
+$createdIssues = 0
+$closedIssues = 0
+$issueNumbers = @{}
+foreach ($spec in $plan.issues) {
+    if (-not $milestoneIndex.ContainsKey($spec.milestone)) {
+        $warnings.Add("Issue「$($spec.title)」的里程碑 $($spec.milestone) 不存在，已跳过。")
+        continue
+    }
+    $milestoneNumber = $milestoneIndex[$spec.milestone].number
+
+    if ($issueIndex.ContainsKey($spec.title)) {
+        $issue = $issueIndex[$spec.title]
+    }
+    else {
+        $issue = Invoke-GitHub -Method Post -Uri "$api/issues" -Body @{
+            title     = $spec.title
+            body      = $spec.body
+            labels    = @($spec.labels)
+            milestone = $milestoneNumber
+        }
+        $issueIndex[$spec.title] = $issue
+        $createdIssues++
+        Write-Output ("  新建 Issue #{0} {1}" -f $issue.number, $spec.title)
+    }
+
+    $issueNumbers[$spec.title] = $issue.number
+
+    if ($spec.state -eq "closed" -and $issue.state -ne "closed") {
+        Invoke-GitHub -Method Patch -Uri "$api/issues/$($issue.number)" `
+            -Body @{ state = "closed"; state_reason = "completed" } | Out-Null
+        $closedIssues++
+        Write-Output ("  关闭 Issue #{0}（已完成）" -f $issue.number)
+    }
+}
+Write-Output "Issue：新建 $createdIssues，关闭 $closedIssues，总计 $($plan.issues.Count)"
+
+# ---------------- Project 看板（尽力而为）----------------
+
+function New-ProjectBoard {
+    $boardName = "NIS 协同调度信息系统"
+    try {
+        $ownerData = Invoke-GraphQL -Query @'
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) { owner { id login } }
+}
+'@ -Variables @{ owner = $Owner; name = $Repository }
+        $ownerId = $ownerData.repository.owner.id
+
+        $existing = Invoke-GraphQL -Query @'
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    owner {
+      ... on ProjectV2Owner {
+        projectsV2(first: 20) { nodes { id title number } }
+      }
+    }
+  }
+}
+'@ -Variables @{ owner = $Owner; name = $Repository }
+        $found = $existing.repository.owner.projectsV2.nodes | Where-Object { $_.title -eq $boardName } | Select-Object -First 1
+
+        if ($found) {
+            $projectId = $found.id
+            $projectNumber = $found.number
+            Write-Output "看板已存在：#$projectNumber（$boardName）"
+        }
+        else {
+            $created = Invoke-GraphQL -Query @'
+mutation($ownerId: ID!, $title: String!) {
+  createProjectV2(input: { ownerId: $ownerId, title: $title }) {
+    projectV2 { id number url }
+  }
+}
+'@ -Variables @{ ownerId = $ownerId; title = $boardName }
+            $projectId = $created.createProjectV2.projectV2.id
+            $projectNumber = $created.createProjectV2.projectV2.number
+            Write-Output ("看板已创建：{0}" -f $created.createProjectV2.projectV2.url)
+        }
+
+        # 状态字段：Backlog / Ready / In Progress / Review / Blocked / Done
+        $statusOptions = @("Backlog", "Ready", "In Progress", "Review", "Blocked", "Done")
+        $fieldId = $null
+        try {
+            $fields = Invoke-GraphQL -Query @'
+query($projectId: ID!) {
+  node(id: $projectId) {
+    ... on ProjectV2 {
+      fields(first: 30) {
+        nodes {
+          ... on ProjectV2SingleSelectField { id name options { id name } }
+        }
+      }
+    }
+  }
+}
+'@ -Variables @{ projectId = $projectId }
+            $status = $fields.node.fields.nodes | Where-Object { $_.name -eq "Status" } | Select-Object -First 1
+            if (-not $status) {
+                $field = Invoke-GraphQL -Query @'
+mutation($projectId: ID!, $name: String!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  createProjectV2Field(input: {
+    projectId: $projectId, dataType: SINGLE_SELECT, name: $name, singleSelectOptions: $options
+  }) {
+    projectV2Field { ... on ProjectV2SingleSelectField { id name options { id name } } }
+  }
+}
+'@ -Variables @{
+                    projectId = $projectId
+                    name      = "Status"
+                    options   = @($statusOptions | ForEach-Object { @{ name = $_; color = "GRAY"; description = "" } })
+                }
+                $status = $field.createProjectV2Field.projectV2Field
+            }
+            $fieldId = $status.id
+            $optionIndex = @{}
+            foreach ($option in $status.options) { $optionIndex[$option.name] = $option.id }
+        }
+        catch {
+            $warnings.Add("创建 Status 字段失败（可能缺少 project 权限）：$($_.Exception.Message)")
+        }
+
+        $added = 0
+        foreach ($spec in $plan.issues) {
+            $number = $issueNumbers[$spec.title]
+            if (-not $number) { continue }
+            $node = (Invoke-GitHub -Uri "$api/issues/$number").node_id
+            $item = Invoke-GraphQL -Query @'
+mutation($projectId: ID!, $contentId: ID!) {
+  addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+    item { id }
+  }
+}
+'@ -Variables @{ projectId = $projectId; contentId = $node }
+            $added++
+
+            if ($fieldId -and $optionIndex.Count -gt 0) {
+                $target = if ($spec.state -eq "closed") { "Done" } else { "Backlog" }
+                if ($optionIndex.ContainsKey($target)) {
+                    try {
+                        Invoke-GraphQL -Query @'
+mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+  updateProjectV2ItemFieldValue(input: {
+    projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
+    value: { singleSelectOptionId: $optionId }
+  }) { projectV2Item { id } }
+}
+'@ -Variables @{
+                            projectId = $projectId
+                            itemId    = $item.addProjectV2ItemById.item.id
+                            fieldId   = $fieldId
+                            optionId  = $optionIndex[$target]
+                        } | Out-Null
+                    }
+                    catch {
+                        $warnings.Add("设置看板状态失败（Issue #$number）：$($_.Exception.Message)")
+                    }
+                }
+            }
+        }
+        Write-Output "看板条目：新增 $added 个"
+    }
+    catch {
+        $warnings.Add("创建 Project 看板失败：$($_.Exception.Message)")
+        Write-Output "看板未创建，请手工执行 3 步："
+        Write-Output "  1. 仓库 Projects -> New project -> Board"
+        Write-Output "  2. 新建 Status 字段，选项：Backlog / Ready / In Progress / Review / Blocked / Done"
+        Write-Output "  3. 把本次创建的 Issue 全部 Add to project，再按里程碑从 Backlog 拖到 Ready"
+    }
+}
+
+if (-not $SkipProject) { New-ProjectBoard }
+else { Write-Output "已跳过 Project 看板（-SkipProject）。" }
+
+# ---------------- 可选 PR ----------------
+
+if ($CreatePr) {
+    $head = (git rev-parse --abbrev-ref HEAD).Trim()
+    if ($head -eq "develop" -or $head -eq "main") {
+        $warnings.Add("当前分支是 $head，未创建 PR。")
+    }
+    else {
+        $existingPr = @(Invoke-GitHub -Uri "$api/pulls?state=open&head=${Owner}:$head")
+        if ($existingPr.Count -gt 0) {
+            Write-Output ("PR 已存在 #{0} {1}" -f $existingPr[0].number, $existingPr[0].html_url)
+        }
+        else {
+            $firstIssue = $issueNumbers.Values | Select-Object -First 1
+            $body = @"
 ## 变更概述
 
-建立课程要求核对、需求规格、RBAC、业务状态机、总体架构、ADR、追踪矩阵和 Sprint 01 任务基线。
+按计划同步标签、里程碑与 Issue，并提交当前分支的设计与接口基线。
 
-Closes #$($aIssue.number)
+Closes #$firstIssue
 
 ## 评审重点
 
-- 用户/角色/权限多对多是否明确
-- 四环节 AI 人在回路是否可实现
-- 多用户冲突规则是否合理
-- API 与数据库位于 DMZ 服务侧是否符合现场条件
-- P0/P1/P2 范围是否接受
+- 需求与验收条件是否可验证
+- 权限矩阵与状态机是否无歧义
+- 契约字段、枚举与数据模型是否一致
+- 三域网络与数据库暴露面是否符合课程要求
 "@
-    $prPayload = @{
-        title = "docs: 建立需求、权限、状态机与架构基线"
-        head  = "docs/a-requirements-architecture"
-        base  = "develop"
-        body  = $prBody
-    } | ConvertTo-Json
-
-    $pr = Invoke-RestMethod -Method Post -Headers $headers -Uri "$api/pulls" `
-        -Body $prPayload -ContentType "application/json"
-    $prLabels = @{ labels = @("A", "P0", "docs") } | ConvertTo-Json
-    Invoke-RestMethod -Method Post -Headers $headers -Uri "$api/issues/$($pr.number)/labels" `
-        -Body $prLabels -ContentType "application/json" | Out-Null
-}
-else {
-    $pr = $pulls[0]
+            $pr = Invoke-GitHub -Method Post -Uri "$api/pulls" -Body @{
+                title = "docs: 建立需求、权限、状态机、架构与接口基线"
+                head  = $head
+                base  = "develop"
+                body  = $body
+            }
+            Write-Output ("PR 已创建 #{0} {1}" -f $pr.number, $pr.html_url)
+        }
+    }
 }
 
-$createdIssues | ForEach-Object { Write-Output "ISSUE #$($_.number) $($_.html_url)" }
-Write-Output "PR #$($pr.number) $($pr.html_url)"
+# ---------------- 汇总 ----------------
 
-$credential.Clear()
-$credentialLines = $null
+Write-Output ""
+Write-Output "---- 汇总 ----"
+Write-Output ("标签 {0} / 里程碑 {1} / Issue {2}（其中 {3} 个已完成并关闭）" -f `
+        $plan.labels.Count, $plan.milestones.Count, $plan.issues.Count,
+    @($plan.issues | Where-Object state -eq "closed").Count)
+if ($warnings.Count -gt 0) {
+    Write-Output "警告："
+    foreach ($item in $warnings) { Write-Output "  - $item" }
+}
+Write-Output "完成。下一步：四人各自认领一个 P0 Issue，并在站会同步状态。"
