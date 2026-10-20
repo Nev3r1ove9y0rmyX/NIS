@@ -39,7 +39,7 @@
 
 ## 3. IAM & Organization Service
 
-主要资源：`users`、`roles`、`permissions`、`user_roles`、`role_permissions`、`organization_units`、`organization_memberships`。
+主要资源：`users`、`roles`、`permissions`、`user_roles`、`role_permissions`、`organization_units`。用户的组织归属保存在 `users.organization_id`，不另设成员关联表；如需跨组织兼任再通过 ADR 引入。
 
 主要接口族：
 

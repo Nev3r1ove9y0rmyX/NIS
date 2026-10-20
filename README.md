@@ -39,6 +39,22 @@
 - [需求追踪矩阵](docs/traceability.md)
 - [Sprint 01 任务卡](docs/sprint-01.md)
 
+## 接口与数据基线
+
+- [契约目录说明](contracts/README.md)
+- [公共 API 契约（OpenAPI 3.1）](contracts/openapi/api-gateway.yaml)
+- [共享枚举与错误组件](contracts/schemas/common.yaml)
+- [接口清单（含权限与幂等要求）](docs/api-catalog.md)
+- [数据模型与 ER 图](docs/data-model.md)
+- [接口与数据模型评审记录](docs/reviews/interface-review.md)
+- [固定演示数据与演示脚本](docs/demo-script.md)
+
+契约校验：
+
+```bash
+python scripts/validate_contracts.py
+```
+
 ## 已审核技术架构
 
 - 前端：Vue 3、Vite、TypeScript

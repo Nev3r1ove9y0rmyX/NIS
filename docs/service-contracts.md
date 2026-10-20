@@ -41,6 +41,8 @@
 | 409 | `VERSION_CONFLICT` | 乐观锁版本冲突 |
 | 409 | `WORKFLOW_CONFLICT` | 非法状态转换 |
 | 409 | `DUPLICATE_OPERATION` | 重复且无法安全返回原结果 |
+| 409 | `IDEMPOTENCY_CONFLICT` | 同一幂等键对应的请求体不同 |
+| 429 | `RATE_LIMITED` | 超过 Gateway 基础限流阈值 |
 | 422 | `VALIDATION_ERROR` | 字段校验错误 |
 | 502 | `DEPENDENCY_FAILURE` | 下游服务失败 |
 | 503 | `SERVICE_UNAVAILABLE` | 服务未就绪或暂不可用 |

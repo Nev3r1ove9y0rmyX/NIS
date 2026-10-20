@@ -26,6 +26,8 @@
 | TC-E01 数据安全 | NFR-SEC-001~003、FR-BACKUP-001 | architecture §6~§7 | B、D | 哈希、访问限制、备份恢复 | 设计中 |
 | TC-E02 软件工程管理 | NFR-MAINT-001 | CONTRIBUTING、任务清单 | A、全员 | 仓库、PR、文档和追踪记录 | 实现中 |
 | TC-E03 优先级 | FR-PRIORITY-001 | requirements §3.6 | B、C | 普通/紧急保存、排序和展示 | 设计中 |
+| TC-D01 契约与数据模型一致性 | NFR-SOA-002、NFR-SOA-003 | contracts/、api-catalog、data-model | A | `python scripts/validate_contracts.py` 通过，且契约字段与数据模型逐列核对 | 设计中 |
+| TC-D02 演示数据与四角色账号 | FR-AUTH-001、FR-ORG-001 | demo-script、scripts/seed_demo_data.py | A | 空库执行种子脚本后四类账号可登录并各完成一步业务 | 设计中 |
 
 ## 证据规则
 
