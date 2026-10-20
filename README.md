@@ -68,17 +68,31 @@ python scripts/validate_contracts.py
 
 消息队列、服务注册中心和分布式事务不属于 P0 依赖。架构变更必须形成 Architecture Decision Record，并确保功能、接口、网络和验收要求保持不变。
 
-## 目标目录
+## 目录约定
 
-```text
-frontend/             前端工程
-services/             Gateway 与 SOA 服务
-contracts/            OpenAPI、共享 Schema 和错误码契约
-deploy/               容器、服务器和网络部署文件
-docs/                 需求、设计、接口、任务与手册
-tests/                 接口、端到端与网络测试
-evidence/              验收截图和脱敏日志
-scripts/               初始化、备份和辅助脚本
+| 目录 | 内容 | 主责 | 入口 |
+|---|---|---|---|
+| `frontend/` | Vue 3 前端工程与四类角色工作台 | C | [说明](frontend/README.md) |
+| `services/` | Gateway 与 7 个业务服务 | B | [说明](services/README.md) |
+| `contracts/` | OpenAPI 契约与共享枚举、错误码 | A | [说明](contracts/README.md) |
+| `deploy/` | 容器编排、反代、MySQL 与备份脚本 | D | [说明](deploy/README.md) |
+| `docs/` | 需求、设计、接口、任务与手册 | A | [设计基线](#设计基线) |
+| `tests/` | 契约、接口、端到端与网络测试 | 全员 | [说明](tests/README.md) |
+| `evidence/` | 验收截图与脱敏日志 | A | [说明](evidence/README.md) |
+| `scripts/` | 契约校验、演示数据、GitHub 同步 | A | [说明](#常用命令) |
+
+## 常用命令
+
+```bash
+# 校验 OpenAPI 契约（重复键、结构、引用、枚举）
+python scripts/validate_contracts.py
+
+# 校验文档相对链接
+python scripts/check_doc_links.py
+
+# 同步 GitHub 标签、里程碑、Issue（幂等，令牌取自 Git 凭据管理器）
+powershell -File scripts/bootstrap-github.ps1 -DryRun
+powershell -File scripts/bootstrap-github.ps1
 ```
 
 ## 第一阶段完成标准

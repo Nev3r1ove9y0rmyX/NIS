@@ -1,0 +1,50 @@
+name: contracts
+
+# 契约与文档一致性检查。
+# 目的：任何人修改 contracts/ 后，重复键、坏引用、operationId 冲突和文档死链都会在
+# PR 阶段被拦住，避免让 C 按错误契约写页面、让 B 按错误字段写接口。
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - 'docs/**'
+      - 'scripts/validate_contracts.py'
+      - 'scripts/check_doc_links.py'
+      - '.github/workflows/contracts.yml'
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - 'contracts/**'
+      - 'docs/**'
+      - 'scripts/validate_contracts.py'
+      - 'scripts/check_doc_links.py'
+      - '.github/workflows/contracts.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-contracts:
+    name: 校验 OpenAPI 契约
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: python -m pip install --disable-pip-version-check pyyaml
+
+      - name: 校验契约（重复键、结构、引用、枚举）
+        run: python scripts/validate_contracts.py
+
+      - name: 校验文档相对链接
+        run: python scripts/check_doc_links.py
