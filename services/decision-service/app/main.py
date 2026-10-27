@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from nis_shared.app import create_service_app
 from nis_shared.config import load_settings

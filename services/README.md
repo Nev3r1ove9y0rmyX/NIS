@@ -55,6 +55,37 @@ python scripts/validate_contracts.py
 契约测试（B 的 P1 任务）应覆盖：响应字段与契约同名、错误码在契约表内、
 权限缺失返回 403、非法状态返回 409、重复幂等请求返回原结果。
 
+## 认证与授权（Issue #8 起可用）
+
+一次登录、非对称签名 JWT、每请求权限校验。统一约定：
+
+| 环节 | 约定 |
+|---|---|
+| 令牌 | IAM 用 RS256 私钥签发；业务服务只拿公钥（`GET /internal/v1/auth/public-keys`，按 `kid` 缓存 300 秒） |
+| 验签 | 每个业务服务**本地验签**，不信任 Gateway 传来的用户头（`docs/service-contracts.md` 第 7 节） |
+| 权限 | JWT 只放身份与角色；权限每次请求向 IAM `/internal/v1/auth/me` 取并集，**改权限后下一次请求立即生效** |
+| 角色上下文 | 多角色用户必须带 `X-Role-Context`，单角色可省略；不匹配返回 403 并写安全审计（决策 D-03） |
+| 越权审计 | 缺权限、令牌无效、角色上下文不符都写 `security_event`：`auth.permission.denied`、`auth.token.invalid`、`auth.role_context.denied`、`gateway.permission.denied` |
+| 停用账号 | 每请求校验账号状态；停用后既有令牌立即失效，重新登录也被拒绝 |
+| 退出 | `POST /api/v1/auth/logout` 为无状态退出（写审计 + 客户端丢弃令牌），令牌仍受 TTL 与状态检查约束 |
+
+业务服务怎么接入（三行）：
+
+```python
+from nis_shared.auth import Principal, require_permission
+
+@router.post("/records", status_code=201)
+def create_record(
+    payload: RecordWrite,
+    principal: Principal = Depends(require_permission("recon:create")),
+) -> dict:
+    ...  # principal.user_id / role_context / permissions 可直接用
+```
+
+- 只要求登录、不要求具体权限时用 `Depends(get_principal)`；
+- 资源范围（本人/被指派/组织）继续由业务接口判断，权限代码只是必要条件；
+- 内部调用统一走 `nis_shared.clients`（连接 1 秒、总 3 秒，错误映射为稳定错误码）。
+
 ## 本地启动（Issue #7 起可用）
 
 共享库在 `services/_shared/nis_shared`（配置、数据库、错误体、健康检查、日志、密码哈希），

@@ -146,14 +146,17 @@ def test_organization_paths(iam) -> None:
 
 
 def test_password_helpers() -> None:
-    from nis_shared.security import hash_password, needs_rehash, verify_password
+    from nis_shared.security import BCRYPT_ROUNDS, hash_password, needs_rehash, verify_password
 
     hashed = hash_password("s3cret-value")
     assert verify_password("s3cret-value", hashed)
     assert not verify_password("wrong", hashed)
     assert not verify_password("s3cret-value", "not-a-bcrypt-hash")
+    # 哈希必须用当前配置的代价
+    assert hashed.split("$")[2] == str(BCRYPT_ROUNDS).zfill(2)
     assert not needs_rehash(hashed)
-    assert needs_rehash("$2b$04$abcdefghijklmnopqrstuv")
+    if BCRYPT_ROUNDS > 4:
+        assert needs_rehash("$2b$04$abcdefghijklmnopqrstuv")
 
 
 def test_seed_requires_passwords(iam) -> None:
