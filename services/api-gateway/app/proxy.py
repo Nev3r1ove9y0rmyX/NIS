@@ -84,9 +84,8 @@ def forward(
         params={k: v for k, v in (params or {}).items() if v is not None},
         headers=headers,
     )
-    if response.status_code >= 500:
-        raise ApiError("DEPENDENCY_FAILURE", details={"status": response.status_code})
     if response.status_code >= 400:
+        # 5xx 也走统一转换：503/504 是下游的真实状态，不能一律改写成 502
         raise _translate_error(response)
     if response.status_code == 204 or not response.content:
         return 204, None
