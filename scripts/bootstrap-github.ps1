@@ -58,12 +58,28 @@ catch {
 }
 
 function Get-GitHubToken {
+    # 1) 显式环境变量优先，便于 CI 或临时会话注入
+    foreach ($name in @("GITHUB_TOKEN", "GH_TOKEN")) {
+        $value = [Environment]::GetEnvironmentVariable($name)
+        if (-not [string]::IsNullOrWhiteSpace($value)) { return $value.Trim() }
+    }
+
+    # 2) 仓库根的 .env.local（已被 .gitignore 的 .env.* 排除，不会提交）
+    $envFile = Join-Path (Split-Path $PSScriptRoot -Parent) ".env.local"
+    if (Test-Path $envFile) {
+        foreach ($line in Get-Content -Encoding UTF8 $envFile) {
+            if ($line -match '^\s*GITHUB_TOKEN\s*=\s*(.+?)\s*$') { return $Matches[1] }
+        }
+    }
+
+    # 3) 回退到 Git 凭据管理器。注意：这里拿到的是 OAuth 应用令牌，
+    #    通常没有 project 权限，只能同步标签、里程碑和 Issue，建不了看板。
     $lines = ("protocol=https`nhost=github.com`n`n" | git credential fill) 2>$null
     if ($LASTEXITCODE -ne 0) { throw "无法从 Git 凭据管理器读取 GitHub 凭据。" }
     foreach ($line in $lines) {
         if ($line -match '^password=(.+)$') { return $Matches[1] }
     }
-    throw "凭据中没有 password 字段，请先完成一次 git push 或 gh auth login。"
+    throw "凭据中没有 password 字段，请先完成一次 git push，或创建 PAT 后写入 .env.local。"
 }
 
 $token = Get-GitHubToken
@@ -350,10 +366,15 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
     }
     catch {
         $warnings.Add("创建 Project 看板失败：$($_.Exception.Message)")
-        Write-Output "看板未创建，请手工执行 3 步："
-        Write-Output "  1. 仓库 Projects -> New project -> Board"
-        Write-Output "  2. 新建 Status 字段，选项：Backlog / Ready / In Progress / Review / Blocked / Done"
-        Write-Output "  3. 把本次创建的 Issue 全部 Add to project，再按里程碑从 Backlog 拖到 Ready"
+        Write-Output "看板未创建。两条路，任选其一："
+        Write-Output "  A. 让令牌具备 project 权限（脚本自动建板）"
+        Write-Output "     1) GitHub -> Settings -> Developer settings -> Personal access tokens -> Tokens (classic)"
+        Write-Output "     2) Generate new token (classic)，勾选 repo、workflow、project"
+        Write-Output "     3) 把令牌写入仓库根 .env.local（一行：GITHUB_TOKEN=ghp_xxx），再重跑本脚本"
+        Write-Output "  B. 手工建（2 分钟，不改令牌）"
+        Write-Output "     1) 仓库 Projects -> New project -> Board"
+        Write-Output "     2) 新建 Status 字段，选项：Backlog / Ready / In Progress / Review / Blocked / Done"
+        Write-Output "     3) 把全部 Issue Add to project，再按里程碑从 Backlog 拖到 Ready"
     }
 }
 

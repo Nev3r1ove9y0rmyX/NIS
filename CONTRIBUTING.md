@@ -22,8 +22,9 @@ powershell -File scripts/bootstrap-github.ps1           # 同步标签、里程�
 
 - 新增或修改任务时先改 `plan.json` 再执行脚本，不要在网页上手工改标题（会与计划不一致）；
 - 脚本按标题判重，重复执行不会产生重复 Issue；
-- 令牌取自 Git 凭据管理器，不接受命令行明文令牌；
-- 自动创建 Project 看板需要令牌具备 `project` 权限，缺少时脚本会打印手工步骤。
+- 令牌解析顺序：`GITHUB_TOKEN` / `GH_TOKEN` 环境变量 → 仓库根 `.env.local` 的 `GITHUB_TOKEN=` → Git 凭据管理器；不接受命令行明文令牌；
+- `.env.local` 已被 `.gitignore` 排除，禁止把令牌提交到仓库或粘贴进 Issue/PR；
+- Git 凭据管理器里通常是 OAuth 应用令牌，**没有 `project` 权限**，只够同步标签、里程碑和 Issue；需要脚本自动建看板时，请创建勾选 `repo`、`workflow`、`project` 的 classic PAT 并写入 `.env.local`。
 
 看板列与节奏：
 
