@@ -112,26 +112,29 @@ Issue”，不占用其他条目时间。
 
 拍板人：B（清单）、D（脚本与部署）。
 
-## 4. 决策记录（会中填写）
+## 4. 决策记录
+
+决策方式：A 依据推荐方案于 2026-10-27 直接定稿（组员在站会知会）；如果后续任一项被推翻，
+按 [服务契约规范](../service-contracts.md) 第 8 节建立变更 Issue，不得口头修改。
 
 | 编号 | 议题 | 结论 | 拍板人 | 记录时间 |
 |---|---|---|---|---|
-| D-01 | 指令总体状态重算位置 | | | |
-| D-02 | 证据文件存储与下载鉴权 | | | |
-| D-03 | `X-Role-Context` 是否强制 | | | |
-| D-04 | 423 / 429 是否保留 | | | |
-| D-05 | 跨组织兼任 | | | |
-| D-06 | 数据库账号与授权清单 | | | |
+| D-01 | 指令总体状态重算位置 | 采用推荐 A：只在 decision-service 重算，时机为 `confirm-issue` 与每次 `assignment-state` 回写，每次重算写审计；execution-service 不计算总体状态 | A | 2026-10-27 |
+| D-02 | 证据文件存储与下载鉴权 | 采用推荐 A：受控目录存文件，Gateway 代理下载，下载前校验权限并写 `evidence.download` 审计 | A | 2026-10-27 |
+| D-03 | `X-Role-Context` 是否强制 | 采用推荐 A：多角色用户必填，单角色可省略；不匹配返回 403 并写安全审计 | A | 2026-10-27 |
+| D-04 | 423 / 429 是否保留 | 采用推荐 A：保留 `ACCOUNT_LOCKED` 与 `RATE_LIMITED`，B 必须真实返回，阈值可配 | A | 2026-10-27 |
+| D-05 | 跨组织兼任 | 采用推荐 A：一人一个主组织，不做成员关联表，P2 再议 | A | 2026-10-27 |
+| D-06 | 数据库账号与授权清单 | 采用推荐：一 Schema 一运行账号；迁移账号独立且不进运行时；`nis_audit` 只给 `SELECT`/`INSERT`；D 写脚本、B 出清单 | A | 2026-10-27 |
 
 ## 5. 会后 15 分钟必须完成的动作
 
-- [ ] 按结论修改契约与文档，`python scripts/validate_contracts.py` 通过；
-- [ ] 在 [interface-review.md](interface-review.md) 第 4 节把对应遗留问题标记为已解决；
-- [ ] 版本号提升：`requirements.md`、`architecture.md`、`workflow.md`、`rbac.md` 升到 1.0，
-      状态改为“已冻结”；
-- [ ] 打 git tag `baseline-1.0`，并在 GitHub 建 Release 说明冻结范围；
-- [ ] 每人认领 1 个 P0 Issue，看板从 Backlog 移到 Ready；
-- [ ] 若结论推翻了现有契约，立即建立变更 Issue，不允许口头决定后直接改代码。
+- [x] 按结论修改契约与文档，`python scripts/validate_contracts.py` 通过；
+- [x] 在 [interface-review.md](interface-review.md) 第 4 节把对应遗留问题标记为已解决；
+- [x] 版本号提升：`requirements.md`、`architecture.md`、`workflow.md`、`rbac.md`、
+      `data-model.md`、`api-catalog.md` 升到 1.0，状态改为“已冻结”；
+- [x] 打 git tag `baseline-1.0`，并在 GitHub 建 Release 说明冻结范围；
+- [x] 每人认领 1 个 P0 Issue，看板从 Backlog 移到 Ready；
+- [x] 若结论推翻了现有契约，立即建立变更 Issue，不允许口头决定后直接改代码。
 
 ## 6. 冻结后的规则
 

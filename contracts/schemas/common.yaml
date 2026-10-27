@@ -270,6 +270,15 @@ components:
       schema:
         $ref: '#/components/schemas/Uuid'
       description: 缺省时由 Gateway 生成，服务必须在全链路透传同一个值。
+    RoleContextHeader:
+      name: X-Role-Context
+      in: header
+      required: false
+      schema:
+        $ref: '#/components/schemas/RoleCode'
+      description: |
+        用户本次操作用的角色上下文。多角色用户必填（后端校验其属于该用户的有效角色），
+        单角色用户可省略。决策 D-03，见 docs/service-contracts.md 第 2 节。
     IdempotencyHeader:
       name: Idempotency-Key
       in: header

@@ -1,8 +1,8 @@
 # 接口清单（API Catalog）
 
-版本：0.1（接口与数据基线）
+版本：1.0（已冻结，2026-10-27）
 
-状态：A 依据 [公共契约](../contracts/openapi/api-gateway.yaml) 整理，B/C/D 评审后冻结。
+状态：已冻结，依据 [公共契约](../contracts/openapi/api-gateway.yaml) 维护。
 
 本清单是接口的**人读索引**，唯一权威定义仍是 `contracts/openapi/api-gateway.yaml`。
 两者不一致时以契约为准，并立即建立 Issue 修正清单。字段、枚举和错误码定义见
@@ -34,7 +34,7 @@ python scripts/validate_contracts.py
 
 ## 2. 公共接口清单
 
-共 50 个操作。表中“幂等”列表示该操作要求 `Idempotency-Key`。
+共 52 个操作。表中“幂等”列表示该操作要求 `Idempotency-Key`。
 
 | # | 方法 | 路径 | operationId | 所需权限 | 幂等 | 主要状态码 |
 |---:|---|---|---|---|:---:|---|
@@ -61,33 +61,35 @@ python scripts/validate_contracts.py
 | 21 | GET | `/recon-records/{record_id}` | `getReconRecord` | recon:read_assigned（本人或被指派） | — | 200、403、404 |
 | 22 | PATCH | `/recon-records/{record_id}` | `updateReconRecord` | recon:edit_own_draft | — | 200、403、404、409、422 |
 | 23 | POST | `/recon-records/{record_id}/submit` | `submitReconRecord` | recon:submit | 是 | 200、400、403、404、409、502 |
-| 24 | GET | `/analysis-reports` | `listAnalysisReports` | analysis:read_assigned | — | 200、401、403 |
-| 25 | POST | `/analysis-reports` | `createAnalysisReport` | analysis:create | 是 | 201、400、403、409 |
-| 26 | GET | `/analysis-reports/{report_id}` | `getAnalysisReport` | analysis:read_assigned | — | 200、403、404 |
-| 27 | PATCH | `/analysis-reports/{report_id}` | `updateAnalysisReport` | analysis:edit_own_draft | — | 200、403、404、409、422 |
-| 28 | POST | `/analysis-reports/{report_id}/submit` | `submitAnalysisReport` | analysis:submit | 是 | 200、400、403、404、409、422、502 |
-| 29 | GET | `/commands` | `listCommands` | command:read_assigned | — | 200、401、403 |
-| 30 | POST | `/commands` | `createCommand` | command:create | 是 | 201、400、403、409 |
-| 31 | GET | `/commands/conflicts` | `checkCommandConflicts` | command:issue | — | 200、403 |
-| 32 | GET | `/commands/{command_id}` | `getCommand` | command:read_assigned | — | 200、403、404 |
-| 33 | PATCH | `/commands/{command_id}` | `updateCommand` | command:create（本人草稿） | — | 200、403、404、409、422 |
-| 34 | POST | `/commands/{command_id}/issue` | `issueCommand` | command:issue | 是 | 200、400、403、404、409、502 |
-| 35 | POST | `/commands/{command_id}/cancel` | `cancelCommand` | command:issue | — | 200、403、404、409 |
-| 36 | GET | `/commands/{command_id}/status` | `getCommandStatus` | command:read_assigned | — | 200、403、404 |
-| 37 | GET | `/commands/{command_id}/results` | `listCommandResults` | command:read_assigned | — | 200、403、404 |
-| 38 | GET | `/assignments` | `listAssignments` | command:read_assigned（本人分配） | — | 200、401、403 |
-| 39 | GET | `/assignments/{assignment_id}` | `getAssignment` | command:read_assigned（本人分配） | — | 200、403、404 |
-| 40 | POST | `/assignments/{assignment_id}/accept` | `acceptAssignment` | execution:respond | — | 200、403、404、409 |
-| 41 | POST | `/assignments/{assignment_id}/reject` | `rejectAssignment` | execution:respond | — | 200、403、404、409、422 |
-| 42 | POST | `/assignments/{assignment_id}/start` | `startAssignment` | execution:update | — | 200、403、404、409 |
-| 43 | POST | `/assignments/{assignment_id}/complete` | `completeAssignment` | execution:submit | 是 | 200、400、403、404、409 |
-| 44 | POST | `/ai/suggestions` | `createAISuggestion` | ai:suggest | — | 200、400、403、503、504 |
-| 45 | GET | `/ai/suggestions/{suggestion_id}` | `getAISuggestion` | ai:suggest | — | 200、403、404 |
-| 46 | POST | `/ai/suggestions/{suggestion_id}/decision` | `decideAISuggestion` | ai:suggest | — | 200、403、404、409、422 |
-| 47 | GET | `/audit-events` | `listAuditEvents` | audit:read | — | 200、401、403 |
-| 48 | GET | `/audit-events/traces/{request_id}` | `getAuditTrace` | audit:read | — | 200、403、404 |
-| 49 | GET | `/health/live` | `gatewayLive` | —（公开） | — | 200 |
-| 50 | GET | `/health/ready` | `gatewayReady` | —（公开） | — | 200、503 |
+| 24 | GET | `/recon-records/{record_id}/evidence/{evidence_id}` | `downloadReconEvidence` | recon:read_assigned（本人或被指派） | — | 200、403、404 |
+| 25 | GET | `/analysis-reports` | `listAnalysisReports` | analysis:read_assigned | — | 200、401、403 |
+| 26 | POST | `/analysis-reports` | `createAnalysisReport` | analysis:create | 是 | 201、400、403、409 |
+| 27 | GET | `/analysis-reports/{report_id}` | `getAnalysisReport` | analysis:read_assigned | — | 200、403、404 |
+| 28 | PATCH | `/analysis-reports/{report_id}` | `updateAnalysisReport` | analysis:edit_own_draft | — | 200、403、404、409、422 |
+| 29 | POST | `/analysis-reports/{report_id}/submit` | `submitAnalysisReport` | analysis:submit | 是 | 200、400、403、404、409、422、502 |
+| 30 | GET | `/commands` | `listCommands` | command:read_assigned | — | 200、401、403 |
+| 31 | POST | `/commands` | `createCommand` | command:create | 是 | 201、400、403、409 |
+| 32 | GET | `/commands/conflicts` | `checkCommandConflicts` | command:issue | — | 200、403 |
+| 33 | GET | `/commands/{command_id}` | `getCommand` | command:read_assigned | — | 200、403、404 |
+| 34 | PATCH | `/commands/{command_id}` | `updateCommand` | command:create（本人草稿） | — | 200、403、404、409、422 |
+| 35 | POST | `/commands/{command_id}/issue` | `issueCommand` | command:issue | 是 | 200、400、403、404、409、502 |
+| 36 | POST | `/commands/{command_id}/cancel` | `cancelCommand` | command:issue | — | 200、403、404、409 |
+| 37 | GET | `/commands/{command_id}/status` | `getCommandStatus` | command:read_assigned | — | 200、403、404 |
+| 38 | GET | `/commands/{command_id}/results` | `listCommandResults` | command:read_assigned | — | 200、403、404 |
+| 39 | GET | `/assignments` | `listAssignments` | command:read_assigned（本人分配） | — | 200、401、403 |
+| 40 | GET | `/assignments/{assignment_id}` | `getAssignment` | command:read_assigned（本人分配） | — | 200、403、404 |
+| 41 | POST | `/assignments/{assignment_id}/accept` | `acceptAssignment` | execution:respond | — | 200、403、404、409 |
+| 42 | POST | `/assignments/{assignment_id}/reject` | `rejectAssignment` | execution:respond | — | 200、403、404、409、422 |
+| 43 | POST | `/assignments/{assignment_id}/start` | `startAssignment` | execution:update | — | 200、403、404、409 |
+| 44 | POST | `/assignments/{assignment_id}/complete` | `completeAssignment` | execution:submit | 是 | 200、400、403、404、409 |
+| 45 | GET | `/assignments/{assignment_id}/evidence/{evidence_id}` | `downloadExecutionEvidence` | command:read_assigned（本人分配） | — | 200、403、404 |
+| 46 | POST | `/ai/suggestions` | `createAISuggestion` | ai:suggest | — | 200、400、403、503、504 |
+| 47 | GET | `/ai/suggestions/{suggestion_id}` | `getAISuggestion` | ai:suggest | — | 200、403、404 |
+| 48 | POST | `/ai/suggestions/{suggestion_id}/decision` | `decideAISuggestion` | ai:suggest | — | 200、403、404、409、422 |
+| 49 | GET | `/audit-events` | `listAuditEvents` | audit:read | — | 200、401、403 |
+| 50 | GET | `/audit-events/traces/{request_id}` | `getAuditTrace` | audit:read | — | 200、403、404 |
+| 51 | GET | `/health/live` | `gatewayLive` | —（公开） | — | 200 |
+| 52 | GET | `/health/ready` | `gatewayReady` | —（公开） | — | 200、503 |
 
 ## 3. 角色与接口的对应关系
 
