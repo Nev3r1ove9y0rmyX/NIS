@@ -1,0 +1,165 @@
+{
+  "labels": [
+    { "name": "A", "color": "1D76DB", "description": "成员 A：需求、架构、集成、报告" },
+    { "name": "B", "color": "0E8A16", "description": "成员 B：后端、数据库、审计" },
+    { "name": "C", "color": "FBCA04", "description": "成员 C：前端、交互、工作台" },
+    { "name": "D", "color": "D93F0B", "description": "成员 D：网络、部署、安全、测试" },
+    { "name": "P0", "color": "B60205", "description": "基础验收阻塞项，必须在中期验收前通过" },
+    { "name": "P1", "color": "D93F0B", "description": "课程结束前完成的扩展或质量任务" },
+    { "name": "P2", "color": "FBCA04", "description": "基础验收通过后再评估" },
+    { "name": "frontend", "color": "C5DEF5", "description": "前端与页面交互" },
+    { "name": "backend", "color": "BFDADC", "description": "后端服务、数据库与接口" },
+    { "name": "network", "color": "5319E7", "description": "网络、防火墙与部署" },
+    { "name": "docs", "color": "0075CA", "description": "需求、设计、报告与手册" },
+    { "name": "test", "color": "0E8A16", "description": "测试用例、证据与验收" },
+    { "name": "blocked", "color": "000000", "description": "存在阻塞，需在站会上升级处理" }
+  ],
+  "milestones": [
+    { "title": "M0-项目初始化", "description": "仓库、目录、工程约定、项目管理体系" },
+    { "title": "M1-需求与设计", "description": "需求、RBAC、状态机、架构、接口与数据基线，评审后冻结" },
+    { "title": "M2-后端与数据库", "description": "IAM、侦察、分析、决策、执行、审计服务的实现" },
+    { "title": "M3-前端工作台", "description": "登录、权限路由与四类角色工作台" },
+    { "title": "M4-网络部署", "description": "三域网络、防火墙、Compose 部署与安全基线" },
+    { "title": "M5-联调与中期验收", "description": "端到端联调、多用户冲突测试、验收测试报告与排练" },
+    { "title": "M6-系统加固与对抗演练", "description": "加固、演练与最终报告" }
+  ],
+  "issues": [
+    {
+      "title": "[A][P0] 仓库目录骨架与工程约定",
+      "labels": ["A", "P0", "docs"],
+      "milestone": "M0-项目初始化",
+      "state": "closed",
+      "body": "## 目标\n建立 frontend/ services/ deploy/ tests/ evidence/ 五个目录与统一工程约定，让 B/C/D 开工时不需要各自拍脑袋决定放哪。\n\n## 负责人\n主责：A\n\n## 交付物\n- 各目录 README（职责、目录约定、实现约束）\n- 根 .env.example 全量键位（按服务分组，不含真实值）\n- evidence/ 命名与脱敏规则\n\n## 验收标准\n- [x] 五个目录存在且各自有说明\n- [x] .env.example 覆盖 7 个 Schema 与 JWT、服务令牌、AI 配置\n- [x] 无真实密码、Token、私钥\n- [x] 文档相对链接无死链"
+    },
+    {
+      "title": "[A][P0] 需求规格说明书与需求来源映射",
+      "labels": ["A", "P0", "docs"],
+      "milestone": "M1-需求与设计",
+      "state": "closed",
+      "body": "## 目标\n把课程要求转成可验证的需求编号，任何人读完都能判断“做完没有”。\n\n## 负责人\n主责：A；评审：B、C、D\n\n## 交付物\n- docs/requirements.md：参与者、功能需求、非功能需求、状态与冲突规则、验收策略\n- 需求来源映射（课程材料与团队决策 → 需求编号）\n- docs/course-requirements-checklist.md：CR-B01~B15 / CR-E01~E03\n\n## 验收标准\n- [x] 每条需求有编号、优先级、可验证的验收条件\n- [x] 明确本阶段不做的内容\n- [x] 非功能需求可测量（并发终端数、超时、恢复）\n- [x] 需求可映射到追踪矩阵用例"
+    },
+    {
+      "title": "[A][P0] 角色权限矩阵与业务状态机",
+      "labels": ["A", "P0", "docs"],
+      "milestone": "M1-需求与设计",
+      "state": "closed",
+      "body": "## 目标\n给 B 实现服务端校验、给 C 控制页面操作，两者不再有歧义。\n\n## 负责人\n主责：A；评审：B、C\n\n## 交付物\n- docs/rbac.md：权限代码、标准角色默认权限、角色×资源×操作矩阵、资源范围规则\n- docs/workflow.md：四类资源状态机、多用户冲突规则、AI 人在回路、SOA 补偿\n\n## 验收标准\n- [x] 每类资源的状态与允许转换明确\n- [x] 多名同类用户的冲突处理有明确规则\n- [x] 指令总体状态与个人分配状态的汇总规则明确\n- [x] 非法转换、越权、重复提交的返回码明确"
+    },
+    {
+      "title": "[A][P0] 系统总体架构与架构决策记录",
+      "labels": ["A", "P0", "docs"],
+      "milestone": "M1-需求与设计",
+      "state": "closed",
+      "body": "## 目标\n给出可落地的组件边界、通信规则、部署结构与故障边界。\n\n## 负责人\n主责：A；评审：B、C、D\n\n## 交付物\n- docs/architecture.md：上下文图、服务图、角色用例、完整时序、通信规则、数据架构、故障边界\n- docs/adr/001~005：SOA、DMZ 服务侧、AI 可降级、共享 MySQL、同步 REST 与补偿\n- docs/service-catalog.md、service-contracts.md、data-ownership.md、soa-deployment.md\n\n## 验收标准\n- [x] 服务职责与数据所有权明确\n- [x] 与 D 的三域网络方案一致（数据库不外网映射）\n- [x] 每个关键决策有 ADR 与后果说明"
+    },
+    {
+      "title": "[A][P0] 接口与数据模型基线（OpenAPI + ER）",
+      "labels": ["A", "P0", "docs", "backend"],
+      "milestone": "M1-需求与设计",
+      "state": "closed",
+      "body": "## 目标\n在 B 写服务、C 写页面前固定字段名、枚举、错误码、幂等与并发规则。\n\n## 负责人\n主责：A；评审：B、C、D\n\n## 交付物\n- contracts/openapi/api-gateway.yaml（50 个公共操作）与 7 个内部服务契约\n- contracts/schemas/common.yaml：枚举、错误体、分页、通用头\n- docs/data-model.md：ER 图、21 张表、索引、跨服务引用与快照规则\n- docs/api-catalog.md：接口清单（权限、幂等、状态码）\n- scripts/validate_contracts.py 与 CI\n\n## 验收标准\n- [x] validate_contracts.py 通过（101 路径 / 125 操作）\n- [x] 枚举只在 common.yaml 定义一次\n- [x] 数据字段与契约字段同名\n- [x] 契约、清单、数据模型、状态机四者一致"
+    },
+    {
+      "title": "[A][P0] 组织基线评审并冻结 v1.0",
+      "labels": ["A", "P0", "docs"],
+      "milestone": "M1-需求与设计",
+      "body": "## 目标\n30 分钟内定完 6 个阻塞性决策，把基线版本从 0.x 冻结为 1.0。\n\n## 负责人\n主责：A；必须参加：B、C、D\n\n## 依赖\n本 Issue 之前的四项设计 Issue 已关闭。\n\n## 交付物\n- docs/reviews/baseline-review.md 的决策记录表填满\n- requirements/rbac/workflow/architecture 版本升至 1.0 并标注已冻结\n- git tag baseline-1.0 与 GitHub Release\n\n## 验收标准\n- [ ] D-01 指令总体状态重算位置已定\n- [ ] D-02 证据文件存储与下载鉴权已定\n- [ ] D-03 X-Role-Context 是否强制已定\n- [ ] D-04 423/429 是否保留已定\n- [ ] D-05 跨组织兼任已定\n- [ ] D-06 数据库账号与授权清单已定\n- [ ] 四人均认领第一个 P0 Issue"
+    },
+    {
+      "title": "[B][P0] 后端工程骨架、迁移与种子数据",
+      "labels": ["B", "P0", "backend", "test"],
+      "milestone": "M2-后端与数据库",
+      "body": "## 目标\n让任何人在空环境上一条命令起服务、迁移数据库并得到四类演示账号。\n\n## 负责人\n主责：B；协作：D（Compose）、A（验收）\n\n## 依赖\n冻结后的接口与数据基线；deploy/README.md 的 .env 键位。\n\n## 交付物\n- FastAPI + SQLAlchemy + Alembic 工程骨架，每个服务独立迁移目录\n- 7 个 Schema 的初始迁移与索引（按 docs/data-model.md）\n- 组织、权限、角色、角色权限、演示账号的种子命令\n- pytest 基础用例与 /health/live、/health/ready\n\n## 验收标准\n- [ ] 空库执行迁移成功，重复执行幂等\n- [ ] 种子后四类账号可登录，密码为自适应哈希\n- [ ] 每个服务就绪检查能反映数据库状态\n- [ ] 迁移顺序符合数据模型第 12 节\n- [ ] 无明文密码进入仓库或日志"
+    },
+    {
+      "title": "[B][P0] 登录认证与 RBAC 服务端校验",
+      "labels": ["B", "P0", "backend"],
+      "milestone": "M2-后端与数据库",
+      "body": "## 目标\n实现一次性认证、非对称签名 JWT、以及每个接口的权限与资源范围校验。\n\n## 负责人\n主责：B；联调：C\n\n## 依赖\n[B][P0] 后端工程骨架、迁移与种子数据\n\n## 交付物\n- 登录/刷新/登出/当前身份接口\n- IAM 公钥分发，业务服务独立验签中间件\n- 权限校验装饰器：权限代码 + 所有权/指派/组织范围 + 资源状态\n- 候选接收人筛选与 users/resolve 批量校验\n\n## 验收标准\n- [ ] 一次登录后会话内不再要求认证\n- [ ] 越权返回 403 并写安全审计\n- [ ] 直接改 URL 访问他人资源返回 403/404，不泄露数据\n- [ ] 角色权限修改后用户后续请求按新权限生效\n- [ ] 停用账号后新请求与登录失败"
+    },
+    {
+      "title": "[B][P0] 侦察与分析模块 API",
+      "labels": ["B", "P0", "backend"],
+      "milestone": "M2-后端与数据库",
+      "body": "## 目标\n落地第一段业务链：侦察草稿、提交指派、分析报告与决策员指派。\n\n## 负责人\n主责：B；联调：C\n\n## 依赖\n[B][P0] 登录认证与 RBAC 服务端校验\n\n## 交付物\n- 侦察记录 CRUD、提交、confirm-submission、mark-compensation\n- 授权读取接口（分析员/决策员/审计三种 purpose）\n- 分析报告 CRUD、提交、confirm-submission、decision-state\n- 报告与侦察记录引用快照\n\n## 验收标准\n- [ ] 只有 draft 可编辑，提交后普通编辑返回 409\n- [ ] 提交前置校验（必填、候选、AI 内容已确认）\n- [ ] 重复幂等提交返回原结果，不重复建指派\n- [ ] 被指派分析员能读，其他分析员读不到\n- [ ] 多分析员报告可并存，不互相覆盖"
+    },
+    {
+      "title": "[B][P0] 指令与执行分配模块 API",
+      "labels": ["B", "P0", "backend"],
+      "milestone": "M2-后端与数据库",
+      "body": "## 目标\n落地决策与执行两段：冲突检查、下达、个人分配、执行结果与状态汇总。\n\n## 负责人\n主责：B；协作：A（冲突规则）\n\n## 依赖\n[B][P0] 侦察与分析模块 API\n\n## 交付物\n- 指令 CRUD、conflicts、issue、confirm-issue、cancel、assignment-state\n- 个人分配创建（批量、幂等）与 accept/reject/start/complete\n- 总体状态汇总函数（遵循 docs/workflow.md 第 5 节）\n- 执行结果与证据元数据\n\n## 验收标准\n- [ ] 下达前必须完成冲突检查，未确认返回 409\n- [ ] 完全相同幂等请求不产生第二条指令\n- [ ] 指令状态与各个人分配状态始终一致\n- [ ] 重复完成不产生第二份结果\n- [ ] 执行员看不到他人分配明细"
+    },
+    {
+      "title": "[B][P0] 审计日志与调用链还原",
+      "labels": ["B", "P0", "backend"],
+      "milestone": "M2-后端与数据库",
+      "body": "## 目标\n所有关键操作可查询、可按请求 ID 还原完整 OODA 过程。\n\n## 负责人\n主责：B；协作：D（日志与审计账号权限）\n\n## 依赖\n[B][P0] 登录认证与 RBAC 服务端校验\n\n## 交付物\n- 审计事件表与只追加写入接口\n- 各服务在关键动作后写事件（登录、提交、指派、状态转换、越权、补偿）\n- 调用链查询接口与 trace 索引\n- 审计查询权限 audit:read 与查询页面所需过滤条件\n\n## 验收标准\n- [ ] 一次完整 OODA 可用 request_id 查出多服务事件\n- [ ] 每条事件含操作者、角色、动作、对象、结果、时间、来源 IP\n- [ ] 不记录密码、Token、完整敏感正文\n- [ ] 审计账号无 UPDATE/DELETE 权限\n- [ ] 越权尝试有 denied 记录"
+    },
+    {
+      "title": "[C][P0] 前端骨架、登录与权限路由",
+      "labels": ["C", "P0", "frontend"],
+      "milestone": "M3-前端工作台",
+      "body": "## 目标\n把契约变成可跑的前端骨架：登录、角色上下文、权限路由与 API 客户端。\n\n## 负责人\n主责：C；联调：B\n\n## 依赖\n[冻结后的契约]；B 的登录与当前身份接口\n\n## 交付物\n- Vue3 + Vite + TS 工程、路由、状态管理、API 客户端（统一注入 token 与 X-Request-ID）\n- 登录页、当前身份展示、多角色切换（写入 X-Role-Context）\n- 路由守卫与无权限页\n- mock 与真实 API 一键切换，mock 必须与契约一致\n\n## 验收标准\n- [ ] 四类账号登录后进入对应工作台\n- [ ] 刷新页面登录态正确恢复\n- [ ] 无权限路由被拦截并有明确提示\n- [ ] lint、typecheck、test、build 通过\n- [ ] 验收时不使用 mock 冒充"
+    },
+    {
+      "title": "[C][P0] 侦察员与分析师工作台",
+      "labels": ["C", "P0", "frontend"],
+      "milestone": "M3-前端工作台",
+      "body": "## 目标\n实现前两段真实业务操作：提交侦察记录、读取并提交分析报告。\n\n## 负责人\n主责：C；联调：B；验收：A\n\n## 依赖\n[C][P0] 前端骨架、登录与权限路由；[B][P0] 侦察与分析模块 API\n\n## 交付物\n- 侦察：列表、新建、草稿保存、证据上传、选择分析员提交、历史记录\n- 分析：被指派记录列表、详情、关联标记、报告编辑、AI 建议确认、选择决策员提交\n- 提交失败时保留输入，冲突时提示刷新\n\n## 验收标准\n- [ ] 侦察员通过真实 API 提交并被分析员看到\n- [ ] 分析员能看到侦察依据并可引用\n- [ ] AI 建议区分建议/修改/已确认三态\n- [ ] 409/422 有明确提示且不清空表单"
+    },
+    {
+      "title": "[C][P0] 决策员与执行员工作台",
+      "labels": ["C", "P0", "frontend"],
+      "milestone": "M3-前端工作台",
+      "body": "## 目标\n实现后两段：并列对比报告、冲突提示后下达、执行反馈与结果查看。\n\n## 负责人\n主责：C；联调：B；验收：A\n\n## 依赖\n[C][P0] 侦察员与分析师工作台；[B][P0] 指令与执行分配模块 API\n\n## 交付物\n- 决策：报告并列对比、执行员候选选择、冲突提示与二次确认、指令下达与取消、状态与结果查看\n- 执行：待办列表、接收/拒绝、执行中、结果与证据提交\n- 紧急任务标红与优先排序\n\n## 验收标准\n- [ ] 多份报告并列展示，不自动合并\n- [ ] 冲突提示后可确认继续或取消\n- [ ] 执行员只看到本人分配\n- [ ] 决策员能看到各执行员状态与最终结果"
+    },
+    {
+      "title": "[C][P1] 统一错误提示与页面状态",
+      "labels": ["C", "P1", "frontend"],
+      "milestone": "M3-前端工作台",
+      "body": "## 目标\n所有失败都有明确界面反馈，不允许只在控制台报错。\n\n## 负责人\n主责：C\n\n## 交付物\n- 统一错误映射（INVALID_REQUEST、FORBIDDEN、VERSION_CONFLICT、WORKFLOW_CONFLICT、422、5xx、断网）\n- 加载态、空数据、无权限、冲突、服务不可用五类组件\n- 关键提交按钮防重复点击与幂等键复用\n\n## 验收标准\n- [ ] 每类错误在界面上有可读文案\n- [ ] 422 字段级回显并保留输入\n- [ ] 网络中断可重试且不产生重复提交"
+    },
+    {
+      "title": "[D][P0] 三域网络、地址规划与防火墙策略",
+      "labels": ["D", "P0", "network"],
+      "milestone": "M4-网络部署",
+      "body": "## 目标\n实际建立外网、信任内网、DMZ 三域，并证明允许与拒绝路径都正确。\n\n## 负责人\n主责：D；评审：A；协作：B、C\n\n## 依赖\ndocs/architecture.md 第 11 节、ADR-002、docs/network-lab-plan.md\n\n## 交付物\n- 设备与节点清单、地址/网关/端口表\n- iKuai 或等价软路由三网段配置\n- 防火墙规则：内网→DMZ 放行、DMZ→内网全拒、外网→映射端口\n- 连通与拒绝测试记录（含防火墙命中日志）\n\n## 验收标准\n- [ ] 三域使用不同网段，地址表与实际一致\n- [ ] 内网可访问外网与 DMZ 服务\n- [ ] 外网仅能访问映射端口\n- [ ] DMZ 无法访问内网任何主机服务\n- [ ] 另一名成员可按文档复现配置"
+    },
+    {
+      "title": "[D][P0] Docker Compose 部署与健康检查",
+      "labels": ["D", "P0", "network", "backend"],
+      "milestone": "M4-网络部署",
+      "body": "## 目标\n在 DMZ 服务侧一台主机上一条命令起全系统，并对外只暴露一个入口。\n\n## 负责人\n主责：D；协作：B（镜像与迁移）\n\n## 依赖\n[B][P0] 后端工程骨架；deploy/README.md 的端口与 env 约定\n\n## 交付物\n- docker-compose.yml（edge_net / service_net / data_net 三层）\n- MySQL 初始化脚本：建库、按 Schema 建账号、授权（audit 不给 UPDATE/DELETE）\n- 每个服务的 Dockerfile 与健康检查\n- 反向代理配置：前端与 /api/v1 统一入口\n\n## 验收标准\n- [ ] 空主机按 README 可完成部署\n- [ ] 仅 80/443 对外，8001-8007 与 3306 不映射\n- [ ] 全部服务 healthy，Gateway /health/ready 为 200\n- [ ] 重启单个服务不影响其他服务就绪\n- [ ] env 中无明文密码进入仓库"
+    },
+    {
+      "title": "[D][P1] 备份恢复与安全基线检查",
+      "labels": ["D", "P1", "network", "test"],
+      "milestone": "M4-网络部署",
+      "body": "## 目标\n满足扩展目标中的数据安全要求，并留下可核对的证据。\n\n## 负责人\n主责：D；协作：B\n\n## 交付物\n- 全实例备份与恢复脚本，含校验摘要\n- 一次实际恢复验证记录（核对各 Schema 与迁移版本）\n- 安全基线检查表：弱口令、默认口令、多余端口、数据库暴露面、日志完整性\n\n## 验收标准\n- [ ] 备份可在另一环境恢复并核对数据\n- [ ] 报告中只有脱敏命令与结果，无明文密码\n- [ ] 基线检查发现问题均建 Issue 跟踪"
+    },
+    {
+      "title": "[A][P0] 端到端联调：首条完整 OODA 链",
+      "labels": ["A", "P0", "test"],
+      "milestone": "M5-联调与中期验收",
+      "body": "## 目标\n用真实接口与真实数据库跑通侦察→分析→决策→执行→审计，不允许静态页面或手改库。\n\n## 负责人\n主责：A；协作：B、C、D\n\n## 依赖\nB/C/D 的前三个 P0 Issue 完成\n\n## 交付物\n- scripts/seed_demo_data.py --with-loop 在联调环境跑通\n- 四角色分别登录的完整链证据（含数据库核对与审计 trace）\n- 失败场景验证：越权、重复提交、并发修改、无效应答\n\n## 验收标准\n- [ ] 四段业务数据全部落库且字段与界面一致\n- [ ] 审计可按 request_id 还原全过程\n- [ ] 越权与重复提交均被拒绝\n- [ ] 证据归档到 evidence/ 并回填追踪矩阵"
+    },
+    {
+      "title": "[A][P0] 多用户与冲突场景测试",
+      "labels": ["A", "P0", "test"],
+      "milestone": "M5-联调与中期验收",
+      "body": "## 目标\n证明同类多用户场景下有明确系统行为，而不是“看起来能用”。\n\n## 负责人\n主责：A；协作：B、C\n\n## 依赖\n[A][P0] 端到端联调：首条完整 OODA 链\n\n## 交付物\n- 多名侦察员提交矛盾信息：各自保留，报告说明可信度\n- 多名分析员结论不一致：并列展示，不自动合并\n- 多名决策员重复/冲突指令：冲突提示 + 幂等\n- 多执行员分配与重复执行：个人状态独立\n\n## 验收标准\n- [ ] 每个冲突场景有可复现步骤与结果\n- [ ] 无数据串号、无重复对象\n- [ ] 违规操作写审计"
+    },
+    {
+      "title": "[A][P0] 中期验收测试报告与演示排练",
+      "labels": ["A", "P0", "docs", "test"],
+      "milestone": "M5-联调与中期验收",
+      "body": "## 目标\n按教师模板产出测试报告，并让四人在 8-12 分钟内稳定演示。\n\n## 负责人\n主责：A；全员参与排练\n\n## 依赖\ndocs/demo-script.md 与已通过的联调用例\n\n## 交付物\n- 中期验收测试报告（15 条基础用例逐条填实测结果与证据）\n- 演示脚本按现场环境调整并至少完整排练一遍\n- 备用演示路径（AI 不可用、服务宕机、三域不可用）\n\n## 验收标准\n- [ ] 每条基础用例有证据或明确不通过原因\n- [ ] 完整排练一次，记录耗时与错误\n- [ ] 四人都能操作自己的角色并解释技术选择\n- [ ] 报告中无真实密码与无关敏感信息"
+    },
+    {
+      "title": "[A][P1] 实验报告与最终演示材料",
+      "labels": ["A", "P1", "docs"],
+      "milestone": "M6-系统加固与对抗演练",
+      "body": "## 目标\n按课程模板整合四人章节，形成与系统实际行为一致的最终报告。\n\n## 负责人\n主责：A；各章节由主责成员提供初稿\n\n## 依赖\n中期验收通过、加固与演练完成\n\n## 交付物\n- 实验报告：摘要、引言、实验内容与分工、系统实现、测试、演练、结果分析、总结\n- 图号表号统一、术语统一、截图与证据对应\n- 最终演示材料与发言顺序\n\n## 验收标准\n- [ ] 报告描述与系统行为一致\n- [ ] 每张图有编号与引用\n- [ ] 不含真实密码、Token、隐私与课程原始材料\n- [ ] 四人章节衔接无重复与矛盾"
+    }
+  ]
+}

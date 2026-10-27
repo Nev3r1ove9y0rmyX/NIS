@@ -1,0 +1,511 @@
+openapi: 3.1.0
+
+info:
+  title: Analysis Service（内部契约）
+  version: 0.1.0
+  description: |
+    端口 8003，Schema 为 nis_analysis。负责分析报告、侦察引用快照、决策员指派和
+    人工确认状态；不改写侦察原始记录，不下达指令。状态机见 docs/workflow.md 第 3 节。
+
+    跨服务约定：
+    - 读取侦察数据只通过 recon-service 的授权接口，不直接连接 nis_recon；
+    - 提交前调用 IAM `/internal/v1/users/resolve` 校验决策员候选资格；
+    - 多分析员可对同一侦察记录分别提交报告，报告不可互相覆盖。
+
+servers:
+  - url: http://analysis-service:8003
+
+tags:
+  - name: 分析报告
+  - name: 授权读取
+  - name: 健康检查
+
+security:
+  - bearerAuth: []
+
+paths:
+  /internal/v1/analysis-reports:
+    get:
+      tags: [分析报告]
+      operationId: analysisListReports
+      summary: 按范围查询报告
+      parameters:
+        - name: viewer_user_id
+          in: query
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: status
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/ReportStatus'
+        - name: recon_record_id
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 报告分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      tags: [分析报告]
+      operationId: analysisCreateReport
+      summary: 创建报告草稿（幂等）
+      parameters:
+        - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportCreate'
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/analysis-reports/{report_id}:
+    parameters:
+      - name: report_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [分析报告]
+      operationId: analysisGetReport
+      summary: 报告详情（含侦察引用快照）
+      responses:
+        '200':
+          description: 报告
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [分析报告]
+      operationId: analysisUpdateReport
+      summary: 修改本人报告草稿（乐观锁）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReportPatch'
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /internal/v1/analysis-reports/{report_id}/submit:
+    parameters:
+      - name: report_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+    post:
+      tags: [分析报告]
+      operationId: analysisSubmitReport
+      summary: 提交报告并写入决策员指派
+      description: |
+        只接受 draft 且 ai_content_confirmed=true（AI 建议已全部接受、修改或舍弃）。
+        服务把状态推进到 submitting，Coordinator 校验候选后调用 `confirm-submission`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, decision_maker_ids, ai_content_confirmed]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                decision_maker_ids:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                ai_content_confirmed:
+                  type: boolean
+      responses:
+        '200':
+          description: 已进入 submitting
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /internal/v1/analysis-reports/{report_id}/confirm-submission:
+    parameters:
+      - name: report_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [分析报告]
+      operationId: analysisConfirmSubmission
+      summary: Coordinator 确认指派成功，推进到 assigned
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200':
+          description: 已确认
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/analysis-reports/{report_id}/decision-state:
+    post:
+      tags: [分析报告]
+      operationId: analysisUpdateDecisionState
+      summary: Decision Service 回写决策进度
+      description: 决策员开始处理置 under_decision；成功下达至少一条指令后置 decided；退回置 rejected。
+      parameters:
+        - name: report_id
+          in: path
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state:
+                  type: string
+                  enum: [under_decision, decided, rejected]
+                command_id:
+                  $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Report'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /internal/v1/analysis-reports/{report_id}/authorized-view:
+    parameters:
+      - name: report_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [授权读取]
+      operationId: analysisAuthorizedView
+      summary: 供 Decision/Audit 读取授权字段
+      parameters:
+        - name: requester_user_id
+          in: query
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: purpose
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [decision, audit]
+      responses:
+        '200':
+          description: 授权的只读视图
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportAuthorizedView'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /health/live:
+    get:
+      tags: [健康检查]
+      operationId: analysisLive
+      summary: 存活检查
+      security: []
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /health/ready:
+    get:
+      tags: [健康检查]
+      operationId: analysisReady
+      summary: 就绪检查（含数据库与 Recon 依赖）
+      security: []
+      responses:
+        '200':
+          description: 就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Forbidden:
+      description: 无权限或资源范围不符
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    Conflict:
+      description: 版本冲突或非法状态转换
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ValidationError:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ServiceUnavailable:
+      description: 服务未就绪
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+
+  schemas:
+    Health:
+      type: object
+      required: [status, service, checked_at]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        service:
+          type: string
+          const: analysis-service
+        checked_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+
+    ReconLink:
+      type: object
+      required: [recon_record_id, recon_title_snapshot]
+      properties:
+        recon_record_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        recon_title_snapshot:
+          type: string
+        recon_owner_snapshot:
+          type: string
+        recon_priority_snapshot:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+        linked_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    ReportCreate:
+      type: object
+      required:
+        - author_id
+        - organization_id
+        - title
+        - recon_record_ids
+        - key_findings
+        - risk_level
+        - recommended_actions
+        - priority
+      properties:
+        author_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        organization_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        title:
+          type: string
+          minLength: 2
+          maxLength: 200
+        recon_record_ids:
+          type: array
+          minItems: 1
+          items:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        recon_snapshots:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconLink'
+          description: 由调用方在取得授权读取结果后写入的不可变快照。
+        key_findings:
+          type: string
+          minLength: 10
+          maxLength: 8000
+        relations:
+          type: string
+          maxLength: 8000
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+        recommended_actions:
+          type: string
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+
+    ReportPatch:
+      type: object
+      required: [expected_version]
+      properties:
+        expected_version:
+          type: integer
+          minimum: 1
+        title:
+          type: string
+        key_findings:
+          type: string
+        relations:
+          type: string
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+        recommended_actions:
+          type: string
+        priority:
+          $ref: '../schemas/common.yaml#/components/schemas/Priority'
+
+    Report:
+      allOf:
+        - $ref: '../schemas/common.yaml#/components/schemas/AuditFields'
+        - $ref: '../schemas/common.yaml#/components/schemas/VersionedResource'
+        - $ref: '../schemas/common.yaml#/components/schemas/HumanConfirmation'
+        - type: object
+          required: [id, report_no, title, status, author_id, recon_links, priority]
+          properties:
+            id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            report_no:
+              type: string
+            title:
+              type: string
+            status:
+              $ref: '../schemas/common.yaml#/components/schemas/ReportStatus'
+            author_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            organization_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            recon_links:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReconLink'
+            key_findings:
+              type: string
+            relations:
+              type: string
+            risk_level:
+              type: string
+            recommended_actions:
+              type: string
+            priority:
+              $ref: '../schemas/common.yaml#/components/schemas/Priority'
+            ai_content_confirmed:
+              type: boolean
+            decision_maker_ids:
+              type: array
+              items:
+                $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            submitted_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+
+    ReportPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Report'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    ReportAuthorizedView:
+      type: object
+      required: [report_id, granted]
+      properties:
+        report_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        granted:
+          type: boolean
+        report:
+          $ref: '#/components/schemas/Report'

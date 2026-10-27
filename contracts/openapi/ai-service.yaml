@@ -1,0 +1,327 @@
+openapi: 3.1.0
+
+info:
+  title: AI Assistance Service（内部契约）
+  version: 0.1.0
+  description: |
+    端口 8006，Schema 为 nis_ai。为侦察、分析、决策、执行四个环节提供统一的建议
+    接口，并记录模型来源与人工确认元数据。本服务不得调用任何业务提交接口，不得直接
+    改变业务状态或分配用户。
+
+    降级约定：AI 不可用、超时或结果被拒绝时，人工业务流程必须继续。请求方不得把
+    AI 失败当作业务失败处理。
+
+servers:
+  - url: http://ai-service:8006
+
+tags:
+  - name: 建议
+  - name: 健康检查
+
+security:
+  - bearerAuth: []
+
+paths:
+  /internal/v1/suggestions:
+    post:
+      tags: [建议]
+      operationId: aiCreateSuggestion
+      summary: 生成建议（只读，不改变业务状态）
+      description: |
+        请求必须声明 stage 与 suggestion_type。服务记录模型名、版本、耗时和输入摘要；
+        返回的 status 一律为 pending，必须经人工处理接口确认后才能进入业务字段。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SuggestionCreate'
+      responses:
+        '200':
+          description: 建议
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Suggestion'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/Timeout'
+    get:
+      tags: [建议]
+      operationId: aiListSuggestions
+      summary: 按业务对象查询历史建议
+      parameters:
+        - name: business_object_type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [recon_record, analysis_report, command, assignment]
+        - name: business_object_id
+          in: query
+          required: true
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 建议分页
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, page_size, total]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Suggestion'
+                  page:
+                    type: integer
+                  page_size:
+                    type: integer
+                  total:
+                    type: integer
+
+  /internal/v1/suggestions/{suggestion_id}:
+    parameters:
+      - name: suggestion_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [建议]
+      operationId: aiGetSuggestion
+      summary: 建议详情与人工处理状态
+      responses:
+        '200':
+          description: 建议
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Suggestion'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /internal/v1/suggestions/{suggestion_id}/decision:
+    parameters:
+      - name: suggestion_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [建议]
+      operationId: aiDecideSuggestion
+      summary: 记录人工接受、修改或舍弃
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, confirmed_by]
+              properties:
+                decision:
+                  type: string
+                  enum: [accepted, edited, rejected]
+                confirmed_by:
+                  $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                edited_content:
+                  type: object
+                  additionalProperties: true
+                note:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: 处理结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Suggestion'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /health/live:
+    get:
+      tags: [健康检查]
+      operationId: aiLive
+      summary: 存活检查（不依赖模型可用性）
+      security: []
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /health/ready:
+    get:
+      tags: [健康检查]
+      operationId: aiReady
+      summary: 就绪检查（含数据库与模型适配器状态）
+      security: []
+      responses:
+        '200':
+          description: 就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    Conflict:
+      description: 建议已被处理，不能重复处理
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ValidationError:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ServiceUnavailable:
+      description: 模型不可用或服务未就绪
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    Timeout:
+      description: 模型调用超时
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+
+  schemas:
+    Health:
+      type: object
+      required: [status, service, checked_at]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        service:
+          type: string
+          const: ai-service
+        checked_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+
+    SuggestionCreate:
+      type: object
+      required:
+        - stage
+        - business_object_type
+        - business_object_id
+        - suggestion_type
+        - requested_by
+      properties:
+        stage:
+          $ref: '../schemas/common.yaml#/components/schemas/AIStage'
+        business_object_type:
+          type: string
+          enum: [recon_record, analysis_report, command, assignment]
+        business_object_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        suggestion_type:
+          type: string
+          enum:
+            - summary
+            - classification
+            - missing_field_hint
+            - entity_relation
+            - risk_assessment
+            - action_options
+            - conflict_hint
+            - command_draft
+            - execution_checklist
+            - result_summary
+        requested_by:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        input_text:
+          type: string
+          maxLength: 16000
+          description: 可选，由调用方裁剪后的业务文本；不得包含密码、Token 或越权数据。
+        extra_context:
+          type: object
+          additionalProperties: true
+
+    Suggestion:
+      type: object
+      required:
+        - id
+        - stage
+        - suggestion_type
+        - content
+        - status
+        - model_name
+        - created_at
+      properties:
+        id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        stage:
+          $ref: '../schemas/common.yaml#/components/schemas/AIStage'
+        business_object_type:
+          type: string
+        business_object_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        suggestion_type:
+          type: string
+        content:
+          type: object
+          additionalProperties: true
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        source_refs:
+          type: array
+          items:
+            type: string
+        model_name:
+          type: string
+        model_version:
+          type: string
+        latency_ms:
+          type: integer
+        status:
+          $ref: '../schemas/common.yaml#/components/schemas/AISuggestionStatus'
+        human_confirmed_by:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        human_confirmed_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        edited_content:
+          type: object
+          additionalProperties: true
+        created_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'

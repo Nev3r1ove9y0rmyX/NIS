@@ -25,27 +25,74 @@
 
 四台电脑的联调与验收网络见 [组网与部署建议](docs/network-lab-plan.md)。
 
-## 建议技术栈
+## 设计基线
+
+- [课程要求核对表](docs/course-requirements-checklist.md)
+- [需求规格说明书](docs/requirements.md)
+- [角色与权限设计](docs/rbac.md)
+- [业务状态机](docs/workflow.md)
+- [系统总体架构](docs/architecture.md)
+- [SOA 服务目录](docs/service-catalog.md)
+- [服务契约规范](docs/service-contracts.md)
+- [数据所有权](docs/data-ownership.md)
+- [SOA 部署设计](docs/soa-deployment.md)
+- [需求追踪矩阵](docs/traceability.md)
+- [Sprint 01 任务卡](docs/sprint-01.md)
+
+## 接口与数据基线
+
+- [契约目录说明](contracts/README.md)
+- [公共 API 契约（OpenAPI 3.1）](contracts/openapi/api-gateway.yaml)
+- [共享枚举与错误组件](contracts/schemas/common.yaml)
+- [接口清单（含权限与幂等要求）](docs/api-catalog.md)
+- [数据模型与 ER 图](docs/data-model.md)
+- [接口与数据模型评审记录](docs/reviews/interface-review.md)
+- [固定演示数据与演示脚本](docs/demo-script.md)
+
+契约校验：
+
+```bash
+python scripts/validate_contracts.py
+```
+
+## 已审核技术架构
 
 - 前端：Vue 3、Vite、TypeScript
-- 后端：FastAPI、SQLAlchemy、Pydantic
-- 数据库：MySQL 8
+- 架构：课程适配型 SOA、单仓库、统一 API Gateway
+- 服务：FastAPI、SQLAlchemy、Pydantic，8 个粗粒度服务
+- 通信：REST/JSON、OpenAPI，同步调用为主
+- 数据库：一个 MySQL 8 实例，按服务划分逻辑 Schema
 - 部署：Docker Compose、Ubuntu 虚拟机
 - 认证授权：JWT、RBAC
 - 网络：外部网络、DMZ、信任内网三个区域
 
-若团队决定更换框架，应先形成 Architecture Decision Record，并确保功能、接口、网络和验收要求保持不变。
+消息队列、服务注册中心和分布式事务不属于 P0 依赖。架构变更必须形成 Architecture Decision Record，并确保功能、接口、网络和验收要求保持不变。
 
-## 目标目录
+## 目录约定
 
-```text
-frontend/             前端工程
-backend/              后端工程
-deploy/               容器、服务器和网络部署文件
-docs/                 需求、设计、接口、任务与手册
-tests/                 接口、端到端与网络测试
-evidence/              验收截图和脱敏日志
-scripts/               初始化、备份和辅助脚本
+| 目录 | 内容 | 主责 | 入口 |
+|---|---|---|---|
+| `frontend/` | Vue 3 前端工程与四类角色工作台 | C | [说明](frontend/README.md) |
+| `services/` | Gateway 与 7 个业务服务 | B | [说明](services/README.md) |
+| `contracts/` | OpenAPI 契约与共享枚举、错误码 | A | [说明](contracts/README.md) |
+| `deploy/` | 容器编排、反代、MySQL 与备份脚本 | D | [说明](deploy/README.md) |
+| `docs/` | 需求、设计、接口、任务与手册 | A | [设计基线](#设计基线) |
+| `tests/` | 契约、接口、端到端与网络测试 | 全员 | [说明](tests/README.md) |
+| `evidence/` | 验收截图与脱敏日志 | A | [说明](evidence/README.md) |
+| `scripts/` | 契约校验、演示数据、GitHub 同步 | A | [说明](#常用命令) |
+
+## 常用命令
+
+```bash
+# 校验 OpenAPI 契约（重复键、结构、引用、枚举）
+python scripts/validate_contracts.py
+
+# 校验文档相对链接
+python scripts/check_doc_links.py
+
+# 同步 GitHub 标签、里程碑、Issue（幂等，令牌取自 Git 凭据管理器）
+powershell -File scripts/bootstrap-github.ps1 -DryRun
+powershell -File scripts/bootstrap-github.ps1
 ```
 
 ## 第一阶段完成标准

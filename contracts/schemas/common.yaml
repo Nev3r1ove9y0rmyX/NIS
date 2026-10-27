@@ -1,0 +1,287 @@
+# 共享契约组件库
+#
+# 本文件不是独立的 OpenAPI 文档，而是被 contracts/openapi/*.yaml 以外部引用方式
+# 复用的组件库，用于保证枚举、错误格式、分页和通用字段在全系统只有一个定义。
+#
+# 引用方式：
+#   $ref: '../schemas/common.yaml#/components/schemas/Error'
+#
+# 修改规则：任何枚举值的新增或删除都属于契约变更，必须按
+# docs/service-contracts.md 第 8 节走评审流程，并同步更新 docs/workflow.md
+# 与 docs/data-model.md。当前基线：v0.1。
+
+components:
+  schemas:
+    # ---------- 通用标识与审计 ----------
+
+    Uuid:
+      type: string
+      format: uuid
+      description: 跨服务稳定标识符，统一使用 UUID 字符串，不得使用自增整数对外暴露。
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: ISO 8601 UTC 时间，例如 2026-10-16T08:30:00Z。
+
+    AuditFields:
+      type: object
+      description: 所有可持久化业务资源共用的审计字段。
+      required: [created_at, created_by, updated_at, updated_by]
+      properties:
+        created_at:
+          $ref: '#/components/schemas/Timestamp'
+        created_by:
+          $ref: '#/components/schemas/Uuid'
+        updated_at:
+          $ref: '#/components/schemas/Timestamp'
+        updated_by:
+          $ref: '#/components/schemas/Uuid'
+
+    VersionedResource:
+      type: object
+      description: 可编辑资源必须携带乐观锁版本号，旧版本写入返回 409 VERSION_CONFLICT。
+      required: [version]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: 乐观锁版本号，每次成功更新加 1。
+
+    HumanConfirmation:
+      type: object
+      description: AI 建议进入业务字段前必须完成的人工确认记录。
+      properties:
+        human_confirmed:
+          type: boolean
+          description: 为 true 表示该内容已由人在回路确认，可以直接驱动业务提交。
+        confirmed_by:
+          $ref: '#/components/schemas/Uuid'
+        confirmed_at:
+          $ref: '#/components/schemas/Timestamp'
+
+    # ---------- 枚举 ----------
+
+    RoleCode:
+      type: string
+      description: 四类标准业务角色代码，与 docs/rbac.md 一致。
+      enum:
+        - reconnaissance
+        - analyst
+        - decision_maker
+        - executor
+
+    Priority:
+      type: string
+      description: 业务优先级。urgent 需要优先展示并以醒目样式提示。
+      enum:
+        - normal
+        - urgent
+
+    UserStatus:
+      type: string
+      description: 账号状态。disabled 与 locked 均不允许登录和续签。
+      enum:
+        - active
+        - disabled
+        - locked
+
+    Credibility:
+      type: string
+      description: 侦察信息可信度，由侦察员填写，AI 只能建议。
+      enum:
+        - high
+        - medium
+        - low
+        - unverified
+
+    ReconStatus:
+      type: string
+      description: 侦察记录状态机，见 docs/workflow.md 第 2 节。
+      enum:
+        - draft
+        - submitting
+        - assigned
+        - under_analysis
+        - analyzed
+        - rejected
+        - compensation_required
+
+    ReportStatus:
+      type: string
+      description: 分析报告状态机，见 docs/workflow.md 第 3 节。
+      enum:
+        - draft
+        - submitting
+        - assigned
+        - under_decision
+        - decided
+        - rejected
+        - compensation_required
+
+    CommandStatus:
+      type: string
+      description: 决策指令总体状态，由各执行分配状态汇总，见 docs/workflow.md 第 4 至 5 节。
+      enum:
+        - draft
+        - issuing
+        - issued
+        - partially_accepted
+        - accepted
+        - executing
+        - partially_completed
+        - completed
+        - failed
+        - rejected
+        - cancelled
+        - compensation_required
+
+    AssignmentStatus:
+      type: string
+      description: 单个执行员的个人分配状态。
+      enum:
+        - pending
+        - accepted
+        - executing
+        - completed
+        - failed
+        - rejected
+        - cancelled
+
+    AssignmentOutcome:
+      type: string
+      description: 执行结果结论，只允许在 completed 或 failed 提交时填写。
+      enum:
+        - success
+        - failure
+        - partial
+
+    AIStage:
+      type: string
+      description: AI 辅助所在环节，四类环节使用同一套建议与确认流程。
+      enum:
+        - recon
+        - analysis
+        - decision
+        - execution
+
+    AISuggestionStatus:
+      type: string
+      description: AI 建议的人工处理结果。只有 accepted 或 edited 且完成确认后才能进入业务字段。
+      enum:
+        - pending
+        - accepted
+        - edited
+        - rejected
+
+    AuditEventType:
+      type: string
+      description: 审计事件类型。
+      enum:
+        - user_operation
+        - system_event
+        - security_event
+
+    AuditResult:
+      type: string
+      description: 审计事件结果；denied 用于记录越权尝试。
+      enum:
+        - success
+        - failure
+        - denied
+
+    # ---------- 错误与分页 ----------
+
+    Error:
+      type: object
+      description: 统一错误响应体，任何服务都不得返回堆栈、SQL、密钥或内部路径。
+      required: [code, message, request_id]
+      properties:
+        code:
+          type: string
+          description: 稳定错误码，见 docs/service-contracts.md 第 3 节。
+          examples:
+            - WORKFLOW_CONFLICT
+        message:
+          type: string
+          description: 面向用户的中文提示，不得包含内部实现细节。
+        request_id:
+          $ref: '#/components/schemas/Uuid'
+        details:
+          type: object
+          additionalProperties: true
+          description: 机器可读的补充信息，例如冲突字段或当前状态。
+
+    ValidationIssue:
+      type: object
+      required: [field, reason]
+      properties:
+        field:
+          type: string
+          description: 校验失败的字段路径，例如 recon_records.title。
+        reason:
+          type: string
+          description: 失败原因。
+        rejected_value:
+          description: 可选的失败值回显，禁止回显密码或 Token。
+
+    PageMeta:
+      type: object
+      required: [page, page_size, total]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        page_size:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+
+    # ---------- 通用说明 ----------
+    #
+    # 关键提交的请求体由各契约直接定义（含 expected_version），不提供通用基类，
+    # 避免继承关系掩盖真正的必填字段。
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSizeParam:
+      name: page_size
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    RequestIdHeader:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        $ref: '#/components/schemas/Uuid'
+      description: 缺省时由 Gateway 生成，服务必须在全链路透传同一个值。
+    IdempotencyHeader:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+      description: 同一用户、同一端点、同一键且请求体等价时返回原结果。
+
+  headers:
+    RequestId:
+      description: 本次请求的追踪标识，与响应体中的 request_id 一致。
+      schema:
+        $ref: '#/components/schemas/Uuid'

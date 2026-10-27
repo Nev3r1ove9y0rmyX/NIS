@@ -1,0 +1,345 @@
+openapi: 3.1.0
+
+info:
+  title: Audit Service（内部契约）
+  version: 0.1.0
+  description: |
+    端口 8007，Schema 为 nis_audit。负责操作事件、系统事件、安全事件和调用链索引。
+    审计事件只能追加，普通业务角色不得修改或删除；Audit 不作为业务数据库，不保存
+    密码、Token、完整敏感正文。
+
+    写入约定：
+    - 每个业务服务在本地事务成功后写入审计；关键写操作不得在审计失败时静默成功；
+    - 事件必须携带 X-Request-ID，使一次业务动作的跨服务步骤可以按请求 ID 还原；
+    - 重复写入同一 (request_id, service, action, resource_id) 事件必须幂等。
+
+servers:
+  - url: http://audit-service:8007
+
+tags:
+  - name: 事件写入
+  - name: 事件查询
+  - name: 健康检查
+
+security:
+  - bearerAuth: []
+
+paths:
+  /internal/v1/audit-events:
+    post:
+      tags: [事件写入]
+      operationId: auditAppendEvent
+      summary: 追加审计事件（幂等）
+      parameters:
+        - $ref: '../schemas/common.yaml#/components/parameters/IdempotencyHeader'
+        - $ref: '../schemas/common.yaml#/components/parameters/RequestIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuditEventCreate'
+      responses:
+        '201':
+          description: 已记录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEvent'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/Conflict'
+    get:
+      tags: [事件查询]
+      operationId: auditListEvents
+      summary: 分页查询审计事件
+      parameters:
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+        - name: resource_id
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: request_id
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: actor_user_id
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        - name: result
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/AuditResult'
+        - name: from
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        - name: to
+          in: query
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        - name: page
+          $ref: '../schemas/common.yaml#/components/parameters/PageParam'
+        - name: page_size
+          $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
+      responses:
+        '200':
+          description: 事件分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventPage'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /internal/v1/traces/{request_id}:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [事件查询]
+      operationId: auditGetTrace
+      summary: 按请求 ID 还原跨服务操作链
+      description: |
+        返回同一请求 ID 下所有服务事件的稳定时间序列，用于验收“审计员可从日志还原
+        全过程”。事件顺序以服务端单调序号为准，不依赖客户端时钟。
+      responses:
+        '200':
+          description: 调用链
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditTrace'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /health/live:
+    get:
+      tags: [健康检查]
+      operationId: auditLive
+      summary: 存活检查
+      security: []
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /health/ready:
+    get:
+      tags: [健康检查]
+      operationId: auditReady
+      summary: 就绪检查（含数据库与写入队列积压）
+      security: []
+      responses:
+        '200':
+          description: 就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Forbidden:
+      description: 无 audit:read 权限
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    NotFound:
+      description: 请求 ID 无对应事件
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    Conflict:
+      description: 重复事件键但内容不同
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ValidationError:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+    ServiceUnavailable:
+      description: 服务未就绪
+      content:
+        application/json:
+          schema:
+            $ref: '../schemas/common.yaml#/components/schemas/Error'
+
+  schemas:
+    Health:
+      type: object
+      required: [status, service, checked_at]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        service:
+          type: string
+          const: audit-service
+        checked_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+
+    AuditEventCreate:
+      type: object
+      required:
+        - request_id
+        - service
+        - event_type
+        - action
+        - result
+      properties:
+        request_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        service:
+          type: string
+          examples:
+            - recon-service
+        event_type:
+          $ref: '../schemas/common.yaml#/components/schemas/AuditEventType'
+        actor_user_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        actor_role:
+          $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        actor_organization_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        action:
+          type: string
+          examples:
+            - recon_record.submit
+        resource_type:
+          type: string
+        resource_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        result:
+          $ref: '../schemas/common.yaml#/components/schemas/AuditResult'
+        error_code:
+          type: string
+        source_ip:
+          type: string
+        user_agent:
+          type: string
+          maxLength: 300
+        service_identity:
+          type: string
+          description: 调用方服务身份，与最终操作者分别记录。
+        details:
+          type: object
+          additionalProperties: true
+        payload_digest:
+          type: string
+          description: 请求正文摘要（如 sha256），用于完整性核对且不落敏感明文。
+
+    AuditEvent:
+      allOf:
+        - type: object
+          required:
+            - id
+            - request_id
+            - occurred_at
+            - service
+            - event_type
+            - action
+            - result
+          properties:
+            id:
+              type: string
+              description: 单调递增事件号，只追加不修改。
+            occurred_at:
+              $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+            sequence:
+              type: integer
+              description: 服务内单调序号，用于稳定排序。
+            request_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            service:
+              type: string
+            event_type:
+              $ref: '../schemas/common.yaml#/components/schemas/AuditEventType'
+            actor_user_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            actor_role:
+              $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+            actor_organization_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            action:
+              type: string
+            resource_type:
+              type: string
+            resource_id:
+              $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+            result:
+              $ref: '../schemas/common.yaml#/components/schemas/AuditResult'
+            error_code:
+              type: string
+            source_ip:
+              type: string
+            service_identity:
+              type: string
+            details:
+              type: object
+              additionalProperties: true
+            payload_digest:
+              type: string
+
+    AuditEventPage:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total:
+          type: integer
+
+    AuditTrace:
+      type: object
+      required: [request_id, started_at, outcome, events]
+      properties:
+        request_id:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+        started_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        completed_at:
+          $ref: '../schemas/common.yaml#/components/schemas/Timestamp'
+        outcome:
+          $ref: '../schemas/common.yaml#/components/schemas/AuditResult'
+        event_count:
+          type: integer
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
