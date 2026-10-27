@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.proxy import forward as _forward_iam
+from app.proxy import forward_bytes
 from nis_shared.auth import Principal, get_principal
 from nis_shared.errors import ApiError
 
@@ -188,6 +189,19 @@ def update_recon_record(
         json_body=payload.model_dump(exclude_none=True),
     )
     return JSONResponse(record, status_code=code)
+
+
+@router.get(
+    "/recon-records/{record_id}/evidence/{evidence_id}", summary="下载侦察证据（受控代理）"
+)
+def download_recon_evidence(record_id: str, evidence_id: str, request: Request):
+    _principal(request, "recon:read_assigned")
+    return forward_bytes(
+        request,
+        f"/internal/v1/recon-records/{record_id}/evidence/{evidence_id}",
+        permission="recon:read_assigned",
+        upstream="recon",
+    )
 
 
 @router.post("/recon-records/{record_id}/submit", summary="提交侦察记录并指派分析员")

@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
-from fastapi import Request
+from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 
 from nis_shared.auth import Principal, get_principal
@@ -95,6 +95,36 @@ def forward(
 def forward_response(request: Request, method: str, path: str, **kwargs: Any) -> JSONResponse:
     code, payload = forward(request, method, path, **kwargs)
     return JSONResponse(payload, status_code=code)
+
+
+def forward_bytes(
+    request: Request,
+    path: str,
+    *,
+    permission: str | None = None,
+    upstream: str,
+) -> Response:
+    """把二进制内容（证据文件）原样流回浏览器；鉴权与错误体仍走统一逻辑。"""
+
+    authenticate(request, public=False, permission=permission)
+    response: httpx.Response = _upstream_http(request, upstream).request(
+        "GET",
+        path,
+        token=_bearer(request),
+        request_id=getattr(request.state, "request_id", None),
+        headers={name: request.headers[name] for name in FORWARD_HEADERS if name in request.headers},
+    )
+    if response.status_code >= 400:
+        raise _translate_error(response)
+    headers = {}
+    disposition = response.headers.get("content-disposition")
+    if disposition:
+        headers["Content-Disposition"] = disposition
+    return Response(
+        content=response.content,
+        media_type=response.headers.get("content-type", "application/octet-stream"),
+        headers=headers,
+    )
 
 
 def _bearer(request: Request) -> str | None:

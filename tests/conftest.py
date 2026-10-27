@@ -88,6 +88,24 @@ def services_root() -> Path:
     return SERVICES_DIR
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """把 pytest 的临时目录固定在仓库内并在结束时删除。
+
+    DSH 会把子进程的 TEMP 指到工作区，默认的 ``pytest-of-<user>`` 会落在仓库根目录里，
+    既污染工作区又容易被误提交。
+    """
+
+    base = ROOT / ".pytest-tmp"
+    base.mkdir(exist_ok=True)
+    config.option.basetemp = str(base)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    import shutil
+
+    shutil.rmtree(ROOT / ".pytest-tmp", ignore_errors=True)
+
+
 @pytest.fixture
 def sqlite_database():
     """内存 SQLite 数据源；建表由用例在导入模型后调用 ``ensure_schema``。"""

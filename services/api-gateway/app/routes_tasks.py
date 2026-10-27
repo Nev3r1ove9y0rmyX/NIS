@@ -12,7 +12,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.proxy import forward
+from app.proxy import forward, forward_bytes
 from nis_shared.auth import Principal, get_principal
 from nis_shared.errors import ApiError
 
@@ -259,6 +259,19 @@ def get_assignment(assignment_id: str, request: Request) -> JSONResponse:
     _principal(request, "command:read_assigned")
     code, item = _fwd(request, "GET", f"/internal/v1/assignments/{assignment_id}")
     return JSONResponse(item, status_code=code)
+
+
+@router.get(
+    "/assignments/{assignment_id}/evidence/{evidence_id}", summary="下载执行证据（受控代理）"
+)
+def download_execution_evidence(assignment_id: str, evidence_id: str, request: Request):
+    _principal(request, "command:read_assigned")
+    return forward_bytes(
+        request,
+        f"/internal/v1/assignments/{assignment_id}/evidence/{evidence_id}",
+        permission="command:read_assigned",
+        upstream="execution",
+    )
 
 
 @router.post("/assignments/{assignment_id}/accept", summary="接收指令")

@@ -154,6 +154,19 @@ decision-service   command.issue                success  actor=decision_maker
 - 可降级：`AI_ENABLED=false` 或模型不可用时返回 503 `SERVICE_UNAVAILABLE`，人工流程照常；
 - 本期实现是**可复现的规则模板**（`model_name=nis-rule-based`），不依赖外部模型，替换模型时只改 `app/service.py` 的 `generate()`。
 
+## 证据文件（决策 D-02）
+
+| 操作 | 入口 | 权限 |
+|---|---|---|
+| 下载侦察证据 | `GET /api/v1/recon-records/{id}/evidence/{evidence_id}` | `recon:read_assigned` + 记录可见 |
+| 下载执行证据 | `GET /api/v1/assignments/{id}/evidence/{evidence_id}` | `command:read_assigned` + 本人分配 |
+
+- 文件本体在 `EVIDENCE_ROOT` 指向的受控目录，按 `<资源类型>/<资源 UUID>/<文件名>` 分目录；
+- 数据库只存文件名、媒体类型、大小、`sha256`、`storage_ref`，**不存绝对路径**；
+- 下载由业务服务鉴权后流式返回，Gateway 只做代理；每次下载写 `evidence.download` 审计（含 sha256）；
+- 路径解析拒绝绝对路径与 `..`，越界一律 404；受控目录**不要**挂成公开静态路径；
+- 备份范围必须包含该目录（`deploy/README.md`），但备份文件不进 Git。
+
 ## 本地启动（Issue #7 起可用）
 
 共享库在 `services/_shared/nis_shared`（配置、数据库、错误体、健康检查、日志、密码哈希），
