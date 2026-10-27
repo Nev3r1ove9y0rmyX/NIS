@@ -15,13 +15,14 @@ from app.readiness import probe_downstreams
 from app.routes_admin import router as admin_router
 from app.routes_auth import router as auth_router
 from app.routes_records import router as records_router
+from app.routes_tasks import router as tasks_router
 
 settings = load_settings("api-gateway")
 
 app = create_service_app(
     settings,
     database=None,
-    routers=[auth_router, admin_router, records_router],
+    routers=[auth_router, admin_router, records_router, tasks_router],
     readiness_probe=lambda: probe_downstreams(settings.downstream),
 )
 wire_clients(app, settings, with_iam=True)
