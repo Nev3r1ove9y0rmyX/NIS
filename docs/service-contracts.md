@@ -1,6 +1,6 @@
 # SOA 服务契约规范
 
-版本：0.1
+版本：1.0（已冻结，2026-10-27）
 
 ## 1. 版本与路径
 
@@ -15,7 +15,7 @@
 |---|---|---|
 | `Authorization: Bearer ...` | 客户端/IAM | 用户身份；内部服务必须验证 |
 | `X-Request-ID` | Gateway | 全调用链追踪 UUID |
-| `X-Role-Context` | 客户端经 Gateway | 用户当前操作角色，必须属于 JWT 中有效角色 |
+| `X-Role-Context` | 客户端经 Gateway | 用户当前操作角色，必须属于 JWT 中有效角色；**多角色用户必填**，单角色可省略（决策 D-03） |
 | `Idempotency-Key` | 客户端/Gateway | 关键创建和提交操作去重 |
 | `X-Service-Name` | 内部服务 | 服务身份辅助审计，不单独作为信任依据 |
 
@@ -42,6 +42,7 @@
 | 409 | `WORKFLOW_CONFLICT` | 非法状态转换 |
 | 409 | `DUPLICATE_OPERATION` | 重复且无法安全返回原结果 |
 | 409 | `IDEMPOTENCY_CONFLICT` | 同一幂等键对应的请求体不同 |
+| 423 | `ACCOUNT_LOCKED` | 连续登录失败导致账号被临时锁定 |
 | 429 | `RATE_LIMITED` | 超过 Gateway 基础限流阈值 |
 | 422 | `VALIDATION_ERROR` | 字段校验错误 |
 | 502 | `DEPENDENCY_FAILURE` | 下游服务失败 |
@@ -94,3 +95,18 @@
 5. 合并后按依赖顺序发布。
 
 禁止先修改服务返回结构、再让其他成员被动适配。
+
+## 9. 证据文件的存储与下载（决策 D-02）
+
+证据文件（侦察证据、执行结果证据）不在业务表里存文件本体，只存元数据。规则：
+
+1. 文件本体放在服务器**受控目录**，按 `<环境>/<资源类型>/<资源 UUID>/` 分目录，仅服务进程可读；
+2. 数据库只保存文件名、媒体类型、大小、`sha256` 和 `storage_ref`，**不保存绝对路径、不保存外链**；
+3. 上传走业务接口写元数据；下载统一由 Gateway 代理：
+   - `GET /api/v1/recon-records/{record_id}/evidence/{evidence_id}`
+   - `GET /api/v1/assignments/{assignment_id}/evidence/{evidence_id}`
+4. 下载必须依次校验：身份有效 → 具备该资源读取权限 → 资源范围（所有权/指派/组织）匹配；
+   全部通过才流式返回文件；
+5. 每次下载写一条 `evidence.download` 审计事件，包含 `request_id`、文件 `sha256` 与结果；
+6. 禁止把受控目录挂成公开静态路径，也禁止用可猜测的 UUID 直接换取文件而不做权限校验；
+7. 备份与恢复覆盖该目录，备份文件不进 Git。

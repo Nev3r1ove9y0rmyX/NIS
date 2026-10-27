@@ -1,8 +1,8 @@
 # 数据模型与 ER 设计
 
-版本：0.1（接口与数据基线）
+版本：1.0（已冻结，2026-10-27）
 
-状态：A 起草，待 B 在实现前确认字段类型与索引
+状态：已冻结；实现中如类型长度不可行，按变更流程记录
 
 对应契约：[api-gateway.yaml](../contracts/openapi/api-gateway.yaml)、
 [common.yaml](../contracts/schemas/common.yaml)、[服务目录](service-catalog.md)、
@@ -59,6 +59,8 @@
 - 为展示稳定，接收方可以保存**不可变快照列**（标题、作者显示名、优先级），并在列名
   加 `_snapshot` 后缀。实时状态必须回源查询，不能用快照冒充。
 - 上游对象删除一律采用停用、归档或软删除，避免悬空引用。
+- 组织归属按“一人一个主组织”建模（`users.organization_id`），本期**不做跨组织兼任**
+  （决策 D-05）。如后续需要，按 ADR 引入成员关联表，不改动现有列语义。
 
 ### 1.5 索引原则
 
@@ -257,7 +259,8 @@ audit_events.resource_id            -> 任意业务对象 UUID，只作追溯
 
 ### 5.3 `recon_evidence`
 
-只追加，不更新。
+只追加，不更新。文件本体放在受控目录，本表只存元数据；下载必须经 Gateway 鉴权代理并写
+`evidence.download` 审计（决策 D-02，见 [服务契约规范](service-contracts.md) 第 9 节）。
 
 | 列 | 类型 | 约束 | 说明 |
 |---|---|---|---|
@@ -419,7 +422,8 @@ Decision Service 只保存个人分配的**状态摘要**；执行结果明细�
 
 ### 8.2 `execution_evidence`
 
-只追加，不更新。
+只追加，不更新。存储与下载规则同 `recon_evidence`：受控目录存文件、表存元数据、
+下载经 Gateway 鉴权并写审计（决策 D-02）。
 
 | 列 | 类型 | 约束 | 说明 |
 |---|---|---|---|
@@ -562,6 +566,27 @@ ORDER BY ou.sort_order, u.display_name;
 数据库账号按 Schema 授权：每个服务账号只拥有自己 Schema 的
 `SELECT/INSERT/UPDATE/DELETE` 与迁移所需 DDL；`nis_audit` 的账号不授予
 `UPDATE`/`DELETE`。
+
+### 12.1 数据库账号矩阵（决策 D-06）
+
+| 用途 | 账号 | 授权范围 | 说明 |
+|---|---|---|---|
+| IAM 运行 | `nis_iam_app` | `nis_iam` 全表 DML | |
+| 侦察运行 | `nis_recon_app` | `nis_recon` 全表 DML | |
+| 分析运行 | `nis_analysis_app` | `nis_analysis` 全表 DML | |
+| 决策运行 | `nis_decision_app` | `nis_decision` 全表 DML | |
+| 执行运行 | `nis_execution_app` | `nis_execution` 全表 DML | |
+| AI 运行 | `nis_ai_app` | `nis_ai` 全表 DML | |
+| 审计运行 | `nis_audit_app` | `nis_audit` 仅 `SELECT`/`INSERT` | **不授予 `UPDATE`/`DELETE`** |
+| 迁移 | `nis_<schema>_migrate` | 对应 Schema 的 DDL + DML | 只用于执行迁移，不进运行时容器 |
+
+规则：
+
+1. 一个 Schema 一个运行账号，禁止多个服务共用同一账号；
+2. 迁移账号与运行账号分离，Compose 里只给服务注入运行账号；
+3. 账号口令通过环境变量或 Secret 注入，仓库里只有占位值；
+4. 建库、建号与授权脚本由 D 维护（`deploy/mysql/init/`），账号与权限清单由 B 提供；
+5. 验收时用非授权账号直连数据库应被拒绝，作为扩展目标 E1 的证据。
 
 ## 13. 与接口契约的对应关系
 

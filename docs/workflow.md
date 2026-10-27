@@ -1,6 +1,6 @@
 # 业务状态机与冲突处理
 
-版本：0.2（SOA 基线）
+版本：1.0（已冻结，2026-10-27）
 
 ## 1. 通用规则
 
@@ -77,6 +77,25 @@
 - 所有有效分配完成：`completed`；
 - 全部失败或拒绝且无成功结果：`failed` 或 `rejected`；
 - 决策员合法取消剩余分配：`cancelled`。
+
+### 5.1 汇总责任与重算时机（决策 D-01）
+
+`commands.status` 只由 decision-service 重算，execution-service 既不保存也不计算总体状态，
+只回写个人分配状态。Decision 侧保存的 `command_assignments.status` 是个人状态的摘要副本，
+用于渲染与汇总，不是事实来源。
+
+重算只发生在两个时机：
+
+1. `confirm-issue`：全部个人分配创建成功后，把指令从 `issuing` 推进到 `issued`；
+2. 每次 `assignment-state` 回写：在同一个本地事务内更新该分配摘要，并按上面的规则重算总体状态。
+
+约束：
+
+- 汇总规则只允许在一个函数中实现，禁止在 Controller、前端或 Gateway 里重复实现；
+- 每次重算写一条审计事件（`action = command.status.recalculated`），记录旧状态、新状态、
+  触发回写的分配与请求 ID；
+- 重复回写同一分配状态必须幂等，不得因为重试把总体状态来回翻转；
+- Gateway 的 `/commands/{id}/status` 只做聚合读取，不参与状态计算。
 
 ## 6. 冲突解决
 

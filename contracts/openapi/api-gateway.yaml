@@ -585,11 +585,7 @@ paths:
           $ref: '../schemas/common.yaml#/components/parameters/PageParam'
         - name: page_size
           $ref: '../schemas/common.yaml#/components/parameters/PageSizeParam'
-        - name: X-Role-Context
-          in: header
-          required: false
-          schema:
-            $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+        - $ref: '../schemas/common.yaml#/components/parameters/RoleContextHeader'
       responses:
         '200':
           description: 侦察记录分页
@@ -728,6 +724,38 @@ paths:
           $ref: '#/components/responses/Conflict'
         '502':
           $ref: '#/components/responses/DependencyFailure'
+
+  /recon-records/{record_id}/evidence/{evidence_id}:
+    parameters:
+      - name: record_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - name: evidence_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [侦察]
+      operationId: downloadReconEvidence
+      summary: 下载侦察证据文件（受控代理）
+      description: |
+        需要 recon:read_assigned 且资源范围匹配。文件从受控目录流式返回，不经公开静态目录；
+        每次下载写一条 evidence.download 审计。决策 D-02，见 docs/service-contracts.md 第 9 节。
+      responses:
+        '200':
+          description: 文件内容
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   # ==================== 分析 ====================
 
@@ -1380,6 +1408,38 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+
+  /assignments/{assignment_id}/evidence/{evidence_id}:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - name: evidence_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [执行]
+      operationId: downloadExecutionEvidence
+      summary: 下载执行结果证据文件（受控代理）
+      description: |
+        需要 command:read_assigned（本人分配）或决策员的相关查看权限，且资源范围匹配。
+        其他执行员不得下载不属于自己的证据。每次下载写一条 evidence.download 审计。
+      responses:
+        '200':
+          description: 文件内容
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   # ==================== AI 辅助 ====================
 
