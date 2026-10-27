@@ -28,6 +28,10 @@ SCHEMAS = ["nis_iam", "nis_recon", "nis_analysis", "nis_decision", "nis_executio
 #: 审计账号刻意只给 SELECT/INSERT（数据模型 12.1）。
 APPEND_ONLY_SCHEMA = "nis_audit"
 
+#: 唯一允许审计账号 UPDATE 的表：调用链索引是**派生加速表**，不是审计证据。
+#: 证据表 ``audit_events`` 仍然只有 SELECT/INSERT（数据模型 10.1）。
+TRACE_INDEX_TABLE = "audit_trace_index"
+
 
 def connect(user: str, password: str, database: str | None = None):  # noqa: ANN201
     import pymysql  # noqa: PLC0415
@@ -70,8 +74,14 @@ def check_grants(root, schema: str) -> list[str]:  # noqa: ANN001
         problems.append(f"{app_user} 缺少必要的 SELECT/INSERT")
 
     if schema == APPEND_ONLY_SCHEMA:
-        if has["UPDATE"] or has["DELETE"]:
-            problems.append(f"{app_user} 不应拥有 UPDATE/DELETE（审计只追加）")
+        # 审计证据表只追加；调用链索引表允许 UPDATE（它是派生数据）
+        table_scoped_update = f"UPDATE ON `{schema}`.`{TRACE_INDEX_TABLE}`" in joined
+        if has["DELETE"]:
+            problems.append(f"{app_user} 不应拥有 DELETE（审计只追加）")
+        if has["UPDATE"] and not table_scoped_update:
+            problems.append(f"{app_user} 不应拥有整库 UPDATE（只允许 {TRACE_INDEX_TABLE}）")
+        if not table_scoped_update:
+            problems.append(f"{app_user} 缺少 {TRACE_INDEX_TABLE} 的 UPDATE（调用链索引需要）")
     elif not (has["UPDATE"] and has["DELETE"]):
         problems.append(f"{app_user} 缺少自己 Schema 的 UPDATE/DELETE")
 

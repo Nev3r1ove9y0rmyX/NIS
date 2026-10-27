@@ -181,6 +181,8 @@ ROLE_PERMISSIONS: dict[RoleCode, tuple[str, ...]] = {
         "recon:create",
         "recon:edit_own_draft",
         "recon:submit",
+        # 侦察员也需要读权限，但资源范围限定为「本人记录」（rbac 第 3 节矩阵）
+        "recon:read_assigned",
         "ai:suggest",
     ),
     RoleCode.ANALYST: (
@@ -188,12 +190,16 @@ ROLE_PERMISSIONS: dict[RoleCode, tuple[str, ...]] = {
         "analysis:create",
         "analysis:edit_own_draft",
         "analysis:submit",
+        # 分析员要读回自己写的报告（rbac 第 3 节矩阵「本人」列）
+        "analysis:read_assigned",
         "ai:suggest",
     ),
     RoleCode.DECISION_MAKER: (
         "analysis:read_assigned",
         "command:create",
         "command:issue",
+        # 决策员要读回自己创建的指令与各执行员状态
+        "command:read_assigned",
         "ai:suggest",
     ),
     RoleCode.EXECUTOR: (
