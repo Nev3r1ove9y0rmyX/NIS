@@ -283,8 +283,18 @@ mutation($ownerId: ID!, $title: String!) {
         }
 
         # 状态字段：Backlog / Ready / In Progress / Review / Blocked / Done
-        $statusOptions = @("Backlog", "Ready", "In Progress", "Review", "Blocked", "Done")
+        # 新建的 Project 默认只有 Todo / In Progress / Done，必须校正成本项目的六列，
+        # 否则 Backlog / Ready / Review / Blocked 不存在，卡片会全部落在默认值上。
+        $statusSpec = @(
+            @{ name = "Backlog";     color = "GRAY";   description = "已登记但本轮不做" },
+            @{ name = "Ready";       color = "BLUE";   description = "已认领，可以开工" },
+            @{ name = "In Progress"; color = "YELLOW"; description = "正在做，每人不超过 2 项" },
+            @{ name = "Review";      color = "PURPLE"; description = "等另一名成员审查" },
+            @{ name = "Blocked";     color = "RED";    description = "被依赖或环境阻塞" },
+            @{ name = "Done";        color = "GREEN";  description = "验收标准逐条通过" }
+        )
         $fieldId = $null
+        $optionIndex = @{}
         try {
             $fields = Invoke-GraphQL -Query @'
 query($projectId: ID!) {
@@ -312,37 +322,106 @@ mutation($projectId: ID!, $name: String!, $options: [ProjectV2SingleSelectFieldO
 '@ -Variables @{
                     projectId = $projectId
                     name      = "Status"
-                    options   = @($statusOptions | ForEach-Object { @{ name = $_; color = "GRAY"; description = "" } })
+                    options   = $statusSpec
                 }
                 $status = $field.createProjectV2Field.projectV2Field
             }
+            else {
+                $existingNames = @($status.options | ForEach-Object { $_.name })
+                $missing = @($statusSpec | Where-Object { $existingNames -notcontains $_.name })
+                if ($missing.Count -gt 0) {
+                    $updatedField = Invoke-GraphQL -Query @'
+mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
+  updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $options }) {
+    projectV2Field { ... on ProjectV2SingleSelectField { id name options { id name } } }
+  }
+}
+'@ -Variables @{ fieldId = $status.id; options = $statusSpec }
+                    $status = $updatedField.updateProjectV2Field.projectV2Field
+                    Write-Output "Status 字段已校正为六列（原选项：$($existingNames -join ' / ')）"
+                }
+            }
             $fieldId = $status.id
-            $optionIndex = @{}
-            foreach ($option in $status.options) { $optionIndex[$option.name] = $option.id }
+            foreach ($option in $status.options) { $optionIndex[[string]$option.name] = [string]$option.id }
         }
         catch {
-            $warnings.Add("创建 Status 字段失败（可能缺少 project 权限）：$($_.Exception.Message)")
+            $warnings.Add("准备 Status 字段失败（可能缺少 project 权限）：$($_.Exception.Message)")
+        }
+
+        # 先读取已有条目：避免重复添加，也不覆盖人工移动过的卡片。
+        $existingItems = @{}
+        try {
+            $current = Invoke-GraphQL -Query @'
+query($projectId: ID!) {
+  node(id: $projectId) {
+    ... on ProjectV2 {
+      items(first: 100) {
+        nodes {
+          id
+          content { ... on Issue { id number } }
+          fieldValues(first: 20) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { ... on ProjectV2SingleSelectField { name } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+'@ -Variables @{ projectId = $projectId }
+            foreach ($row in $current.node.items.nodes) {
+                if (-not $row.content) { continue }
+                $statusValue = $row.fieldValues.nodes |
+                    Where-Object { $_.name -and $_.field -and $_.field.name -eq "Status" } |
+                    Select-Object -First 1
+                $existingItems[[string]$row.content.id] = [pscustomobject]@{
+                    Id     = $row.id
+                    Status = if ($statusValue) { [string]$statusValue.name } else { $null }
+                }
+            }
+        }
+        catch {
+            $warnings.Add("读取看板已有条目失败：$($_.Exception.Message)")
         }
 
         $added = 0
+        $statusSet = 0
         foreach ($spec in $plan.issues) {
             $number = $issueNumbers[$spec.title]
             if (-not $number) { continue }
-            $node = (Invoke-GitHub -Uri "$api/issues/$number").node_id
-            $item = Invoke-GraphQL -Query @'
+            $issueObject = Invoke-GitHub -Uri "$api/issues/$number"
+            $node = $issueObject.node_id
+
+            if ($existingItems.ContainsKey([string]$node)) {
+                $itemId = $existingItems[[string]$node].Id
+                $currentStatus = $existingItems[[string]$node].Status
+            }
+            else {
+                $item = Invoke-GraphQL -Query @'
 mutation($projectId: ID!, $contentId: ID!) {
   addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
     item { id }
   }
 }
 '@ -Variables @{ projectId = $projectId; contentId = $node }
-            $added++
+                $itemId = $item.addProjectV2ItemById.item.id
+                $currentStatus = $null
+                $added++
+            }
 
-            if ($fieldId -and $optionIndex.Count -gt 0) {
-                $target = if ($spec.state -eq "closed") { "Done" } else { "Backlog" }
-                if ($optionIndex.ContainsKey($target)) {
-                    try {
-                        Invoke-GraphQL -Query @'
+            # 只补空状态，或把已完成但未归位的卡片放回 Done；
+            # 已经被人为推进到 Ready / In Progress 等列的卡片保持不动。
+            $target = $null
+            if ($spec.state -eq "closed" -and $currentStatus -ne "Done") { $target = "Done" }
+            elseif ([string]::IsNullOrWhiteSpace($currentStatus)) { $target = "Backlog" }
+
+            if ($target -and $fieldId -and $optionIndex.ContainsKey($target)) {
+                try {
+                    Invoke-GraphQL -Query @'
 mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   updateProjectV2ItemFieldValue(input: {
     projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
@@ -350,19 +429,19 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
   }) { projectV2Item { id } }
 }
 '@ -Variables @{
-                            projectId = $projectId
-                            itemId    = $item.addProjectV2ItemById.item.id
-                            fieldId   = $fieldId
-                            optionId  = $optionIndex[$target]
-                        } | Out-Null
-                    }
-                    catch {
-                        $warnings.Add("设置看板状态失败（Issue #$number）：$($_.Exception.Message)")
-                    }
+                        projectId = $projectId
+                        itemId    = $itemId
+                        fieldId   = $fieldId
+                        optionId  = $optionIndex[$target]
+                    } | Out-Null
+                    $statusSet++
+                }
+                catch {
+                    $warnings.Add("设置看板状态失败（Issue #$number）：$($_.Exception.Message)")
                 }
             }
         }
-        Write-Output "看板条目：新增 $added 个"
+        Write-Output "看板条目：新增 $added 个，状态补全 $statusSet 个"
     }
     catch {
         $warnings.Add("创建 Project 看板失败：$($_.Exception.Message)")
