@@ -342,6 +342,38 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /internal/v1/recon-records/{record_id}/evidence/{evidence_id}:
+    parameters:
+      - name: record_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - name: evidence_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [授权读取]
+      operationId: reconDownloadEvidence
+      summary: 流式返回侦察证据文件（受控目录，决策 D-02）
+      description: |
+        需要 recon:read_assigned 且资源范围匹配；由 Gateway 代理对外，本服务不直接暴露。
+        路径解析必须拒绝绝对路径与 `..` 穿越，每次下载由调用方写 evidence.download 审计。
+      responses:
+        '200':
+          description: 文件内容
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /health/live:
     get:
       tags: [健康检查]

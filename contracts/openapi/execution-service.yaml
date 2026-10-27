@@ -249,6 +249,38 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  /internal/v1/assignments/{assignment_id}/evidence/{evidence_id}:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - name: evidence_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [执行分配]
+      operationId: executionDownloadEvidence
+      summary: 流式返回执行证据文件（受控目录，决策 D-02）
+      description: |
+        需要 command:read_assigned 且资源范围匹配；执行员只能下载本人分配下的证据，
+        决策员按相关指令范围下载。由 Gateway 代理对外，不直接暴露存储路径。
+      responses:
+        '200':
+          description: 文件内容
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /internal/v1/commands/{command_id}/summary:
     parameters:
       - name: command_id

@@ -1,0 +1,57 @@
+name: backend-tests
+
+# 后端与测试的必过检查。
+# 之前的 contracts 工作流只覆盖 contracts/ 与 docs/，services/ 与 tests/ 的改动没有任何 CI，
+# 导致后端 PR 只能靠本地自测。这里补上：任何触及服务代码或测试的 PR 都必须跑通 pytest。
+
+on:
+  pull_request:
+    paths:
+      - 'services/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'contracts/**'
+      - '.github/workflows/backend-tests.yml'
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - 'services/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'contracts/**'
+      - '.github/workflows/backend-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: 运行后端测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装运行依赖
+        run: python -m pip install --disable-pip-version-check -r services/requirements.txt
+
+      - name: 安装测试依赖
+        # pytest 与 pyyaml 属于测试侧依赖，不在运行时 requirements 里。
+        run: python -m pip install --disable-pip-version-check pytest pyyaml
+
+      - name: 运行测试
+        # 测试使用内存 SQLite，不需要 MySQL 服务容器；真实 MySQL 验证在 D 的部署分支里做。
+        run: python -m pytest tests -q
+
+      - name: 校验契约与文档链接
+        run: |
+          python scripts/validate_contracts.py
+          python scripts/check_doc_links.py

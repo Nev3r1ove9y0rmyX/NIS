@@ -35,8 +35,9 @@ deploy/
 1. 仓库只提交 `.env.example`，真实 `.env` 由每台机器本地创建；
 2. 每个服务只拿自己需要的变量，不用一个万能变量串全部配置；
 3. 数据库账号按 Schema 拆分（矩阵见 [数据模型第 12.1 节](../docs/data-model.md)）：
-   一个 Schema 一个运行账号，迁移用独立账号且不进运行时容器，`nis_audit` 账号只给
-   `SELECT`/`INSERT`，不授予 `UPDATE`/`DELETE`；
+   一个 Schema 一个运行账号，迁移用独立账号且不进运行时容器；`nis_audit` 账号只给
+   `SELECT`/`INSERT`，仅对派生索引表 `audit_trace_index` 额外给 `UPDATE`，
+   `audit_events` 保持只追加、不授予 `UPDATE`/`DELETE`；
 4. JWT 私钥只挂在 IAM 服务上，其余服务只挂公钥；
 5. Compose 中不得出现明文密码，统一通过 `env_file` 或环境变量注入。
 

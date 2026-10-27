@@ -282,6 +282,33 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
 
+  /internal/v1/users/{user_id}/roles/{role_code}:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+      - name: role_code
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/RoleCode'
+    delete:
+      tags: [角色与权限]
+      operationId: iamRevokeUserRole
+      summary: 解除用户角色绑定
+      description: |
+        用户与角色多对多；解除后该用户的后续请求按剩余角色权限生效。
+        需要 iam:manage，写审计。
+      responses:
+        '204':
+          description: 已解除，无响应体
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /internal/v1/roles:
     get:
       tags: [角色与权限]
