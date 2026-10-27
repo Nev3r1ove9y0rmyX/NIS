@@ -12,8 +12,12 @@
     python scripts/seed_demo_data.py --with-loop     # 额外跑完一条完整 OODA 链
 
 可选环境变量：
-    NIS_BASE_URL        默认 http://127.0.0.1:8000/api/v1
-    NIS_ADMIN_USERNAME  默认 admin
+    NIS_BASE_URL             默认 http://127.0.0.1:8000/api/v1（仅 http/https）
+    NIS_ADMIN_USERNAME       默认 admin
+    NIS_ALLOW_PRIVATE_TARGET 默认 1。脚本目标仅限运维配置的单一来源；
+                             出于 SSRF 防护，回环/私网/保留地址需此开关显式允许
+                             （本机与 DMZ 演示地址 10.1.1.20 属于此类）。设为 0
+                             可强制只允许公网目标。跨源重定向一律拒绝。
 
 退出码：0 成功；1 接口或校验失败；2 缺少必需环境变量。
 """
@@ -21,14 +25,20 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import sys
 import uuid
 from typing import Any
 from urllib import error, request
+from urllib.parse import urlparse
 
 BASE_URL = os.environ.get("NIS_BASE_URL", "http://127.0.0.1:8000/api/v1").rstrip("/")
+# 本脚本只应指向运维人员自己配置的演示环境。默认地址与 DMZ 演示地址（10.1.1.20）
+# 都属于回环/私网段，属于本工具的合法目标，因此默认允许；指向公网地址的部署
+# 无需任何开关。该开关只影响目标地址分类，不改变"仅 http/https、固定单一源"。
+ALLOW_PRIVATE_TARGET = os.environ.get("NIS_ALLOW_PRIVATE_TARGET", "1") not in ("0", "false", "no")
 ADMIN_USERNAME = os.environ.get("NIS_ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("NIS_ADMIN_PASSWORD", "")
 DEMO_PASSWORD = os.environ.get("NIS_DEMO_PASSWORD", "")
@@ -79,6 +89,49 @@ def _key() -> str:
     return str(uuid.uuid4())
 
 
+def _validate_target(url: str) -> str:
+    """请求前校验目标：仅 http/https，且必须是指定的单一来源。
+
+    本脚本不从任何网络输入获取 URL，目标只来自运维环境变量 NIS_BASE_URL；
+    即便如此仍做三重防护，防止配置被篡改后变成 SSRF 跳板：
+    1. 仅放行 http/https（阻断 file:// 等协议与重定向到其它协议）；
+    2. 解析 host 并分类：回环/私网/保留地址必须显式允许（演示环境默认允许）；
+    3. 校验后的 url 原样返回，urlopen 只接收本校验过的值，不跟随跨源重定向。
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise SystemExit(f"拒绝请求：仅允许 http/https，实际为 {parsed.scheme!r}")
+    if parsed.username or parsed.password:
+        raise SystemExit("拒绝请求：目标 URL 不允许携带内联凭据")
+    host = parsed.hostname
+    if not host:
+        raise SystemExit(f"拒绝请求：目标缺少主机名 {url!r}")
+
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        if host.lower() == "localhost" and not ALLOW_PRIVATE_TARGET:
+            raise SystemExit(
+                "拒绝请求：localhost 属于回环地址；如确需指向本机演示环境，"
+                "设置 NIS_ALLOW_PRIVATE_TARGET=1"
+            )
+    else:
+        blocked = (
+            ("回环", addr.is_loopback),
+            ("私网", addr.is_private),
+            ("链路本地", addr.is_link_local),
+            ("保留", addr.is_reserved),
+            ("组播", addr.is_multicast),
+        )
+        blocked_kind = next((kind for kind, hit in blocked if hit), "")
+        if blocked_kind and not ALLOW_PRIVATE_TARGET:
+            raise SystemExit(
+                f"拒绝请求：目标 {host} 属于{blocked_kind}地址；"
+                "如确需指向内网/本机演示环境，设置 NIS_ALLOW_PRIVATE_TARGET=1"
+            )
+    return url
+
+
 def _parse(raw: bytes, content_type: str) -> Any:
     if not raw:
         return None
@@ -91,18 +144,38 @@ def _parse(raw: bytes, content_type: str) -> Any:
     return text
 
 
+class _SameOriginRedirectHandler(request.HTTPRedirectHandler):
+    """禁止跨源重定向：3xx 只允许指向同一 host:port，其余视为错误。"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        old, new = urlparse(req.full_url), urlparse(newurl)
+        same = (old.scheme in ("http", "https") and old.scheme == new.scheme
+                and old.hostname == new.hostname and old.port == new.port)
+        if not same:
+            raise error.URLError(f"拒绝跨源重定向 {req.full_url} -> {newurl}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = request.build_opener(_SameOriginRedirectHandler)
+
+
 class Client:
     """一个带身份的 API 客户端；每个角色使用独立实例，避免串号。"""
 
     def __init__(self, base_url: str = BASE_URL) -> None:
-        self.base_url = base_url
+        # 固定单一目标源：所有请求只能发往该 host（见 _validate_target）。
+        self.base_url = _validate_target(base_url)
+        self.origin = (urlparse(base_url).scheme, urlparse(base_url).hostname,
+                       urlparse(base_url).port)
         self.token = ""
         self.username = ""
 
     def send(self, method: str, path: str, body: dict[str, Any] | None = None,
              idempotency_key: str | None = None,
              expect: tuple[int, ...] = (200, 201, 204)) -> Any:
-        url = f"{self.base_url}{path}"
+        url = _validate_target(f"{self.base_url}{path}")
+        if (urlparse(url).scheme, urlparse(url).hostname, urlparse(url).port) != self.origin:
+            raise SystemExit(f"拒绝请求：目标偏离固定来源 {url!r}")
         data = None
         headers = {"Accept": "application/json", "X-Request-ID": str(uuid.uuid4())}
         if self.token:
@@ -114,7 +187,7 @@ class Client:
             headers["Idempotency-Key"] = idempotency_key
         req = request.Request(url, data=data, headers=headers, method=method)
         try:
-            with request.urlopen(req, timeout=30) as response:
+            with _OPENER.open(req, timeout=30) as response:
                 raw = response.read()
                 status = response.status
                 content_type = response.headers.get("Content-Type", "")
