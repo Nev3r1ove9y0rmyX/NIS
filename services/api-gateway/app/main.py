@@ -13,6 +13,7 @@ from nis_shared.wiring import wire_clients
 
 from app.readiness import probe_downstreams
 from app.routes_admin import router as admin_router
+from app.routes_audit_ai import router as audit_ai_router
 from app.routes_auth import router as auth_router
 from app.routes_records import router as records_router
 from app.routes_tasks import router as tasks_router
@@ -22,7 +23,7 @@ settings = load_settings("api-gateway")
 app = create_service_app(
     settings,
     database=None,
-    routers=[auth_router, admin_router, records_router, tasks_router],
+    routers=[auth_router, admin_router, records_router, tasks_router, audit_ai_router],
     readiness_probe=lambda: probe_downstreams(settings.downstream),
 )
 wire_clients(app, settings, with_iam=True)
@@ -33,6 +34,7 @@ for _name, _env in (
     ("analysis", "analysis-service"),
     ("decision", "decision-service"),
     ("execution", "execution-service"),
+    ("audit", "audit-service"),
     ("ai", "ai-service"),
 ):
     setattr(

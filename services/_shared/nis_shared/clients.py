@@ -104,9 +104,17 @@ def _translate_error(response: httpx.Response) -> ApiError:
     from .errors import ERROR_CATALOG  # 循环依赖最小化：仅在出错路径导入
 
     if code not in ERROR_CATALOG:
-        code = {401: "UNAUTHENTICATED", 403: "FORBIDDEN", 404: "RESOURCE_NOT_FOUND", 409: "WORKFLOW_CONFLICT"}.get(
-            response.status_code, "INVALID_REQUEST"
-        )
+        code = {
+            401: "UNAUTHENTICATED",
+            403: "FORBIDDEN",
+            404: "RESOURCE_NOT_FOUND",
+            409: "WORKFLOW_CONFLICT",
+            422: "VALIDATION_ERROR",
+            500: "DEPENDENCY_FAILURE",
+            502: "DEPENDENCY_FAILURE",
+            503: "SERVICE_UNAVAILABLE",
+            504: "DEPENDENCY_TIMEOUT",
+        }.get(response.status_code, "INVALID_REQUEST")
     return ApiError(code, message, details=payload.get("details") or {}, status_code=response.status_code)
 
 

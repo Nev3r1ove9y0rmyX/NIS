@@ -128,6 +128,32 @@ def create_record(
 
 **下达是跨服务流程**（architecture §7）：决策服务校验执行员 → 调 Execution 建个人分配 → 回写本地摘要 → 状态汇总为 `issued`；Execution 不可用时指令落 `compensation_required`，不会显示为已下达。
 
+## 审计与 AI（Issue #11 起可用）
+
+**审计**（`audit-service`，8007）：
+
+- 写入：`POST /internal/v1/audit-events`，只追加、按 `request_id + service + action + result` 幂等；
+- 查询：`GET /api/v1/audit-events`，支持 `resource_type` / `resource_id` / `request_id` / `actor_user_id` / `result` / `from` / `to` + 分页，需要 `audit:read`；
+- 调用链：`GET /api/v1/audit-events/traces/{request_id}`，返回该请求跨服务的全部事件（按事件号排序）、起止时间与最终结果；
+- 范围：登录、失败登录、越权、角色上下文不符、创建/提交/指派/下达/回写/取消、AI 建议生成与处理；
+- 不记录：密码、Token、完整敏感正文（`details` 只放业务标识与状态）；
+- 账号权限：`nis_audit_app` 对 `audit_events` 只有 `SELECT`/`INSERT`，仅 `audit_trace_index` 可 `UPDATE`（派生索引）。
+
+一次业务动作的跨服务调用链示例（同一条 `X-Request-ID`）：
+
+```text
+execution-service  execution_assignment.create  success  actor=decision_maker
+decision-service   command.issue                success  actor=decision_maker
+```
+
+**AI 建议**（`ai-service`，8006）：
+
+- 请求：`POST /api/v1/ai/suggestions`（`stage` + `business_object_type` + `business_object_id` + `suggestion_type`）；
+- 处理：`POST /api/v1/ai/suggestions/{id}/decision`，`decision` 只能是 `accepted` / `edited`（必须带 `edited_content`）/ `rejected`；
+- 人在回路：建议初始为 `pending`，只有人工处理后才有 `human_confirmed_by` / `human_confirmed_at`；重复处理返回 409；
+- 可降级：`AI_ENABLED=false` 或模型不可用时返回 503 `SERVICE_UNAVAILABLE`，人工流程照常；
+- 本期实现是**可复现的规则模板**（`model_name=nis-rule-based`），不依赖外部模型，替换模型时只改 `app/service.py` 的 `generate()`。
+
 ## 本地启动（Issue #7 起可用）
 
 共享库在 `services/_shared/nis_shared`（配置、数据库、错误体、健康检查、日志、密码哈希），
