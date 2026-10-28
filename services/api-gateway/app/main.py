@@ -14,16 +14,28 @@ from nis_shared.wiring import wire_clients
 from app.readiness import probe_downstreams
 from app.routes_admin import router as admin_router
 from app.routes_auth import router as auth_router
+from app.routes_records import router as records_router
 
 settings = load_settings("api-gateway")
 
 app = create_service_app(
     settings,
     database=None,
-    routers=[auth_router, admin_router],
+    routers=[auth_router, admin_router, records_router],
     readiness_probe=lambda: probe_downstreams(settings.downstream),
 )
 wire_clients(app, settings, with_iam=True)
-app.state.iam_http = InternalClient(
-    settings.downstream["iam-service"], service_name="api-gateway"
-)
+# Gateway 自身的转发客户端：每个上游一个，错误映射与超时统一由 InternalClient 处理
+for _name, _env in (
+    ("iam", "iam-service"),
+    ("recon", "recon-service"),
+    ("analysis", "analysis-service"),
+    ("decision", "decision-service"),
+    ("execution", "execution-service"),
+    ("ai", "ai-service"),
+):
+    setattr(
+        app.state,
+        f"{_name}_http",
+        InternalClient(settings.downstream[_env], service_name="api-gateway"),
+    )

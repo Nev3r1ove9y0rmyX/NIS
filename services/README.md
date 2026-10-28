@@ -86,6 +86,27 @@ def create_record(
 - 资源范围（本人/被指派/组织）继续由业务接口判断，权限代码只是必要条件；
 - 内部调用统一走 `nis_shared.clients`（连接 1 秒、总 3 秒，错误映射为稳定错误码）。
 
+## 业务链（Issue #9 起可用）
+
+侦察与分析两段已按契约打通，Gateway 负责注入身份、下游服务负责资源范围：
+
+| 操作 | 入口 | 权限 | 资源范围 |
+|---|---|---|---|
+| 侦察记录列表/详情 | `GET /api/v1/recon-records[/{id}]` | `recon:read_assigned` | 本人创建 或 被指派 |
+| 新建/编辑草稿 | `POST`、`PATCH /api/v1/recon-records[/{id}]` | `recon:create`、`recon:edit_own_draft` | 本人；仅 `draft` |
+| 提交并指派分析员 | `POST /api/v1/recon-records/{id}/submit` | `recon:submit` | 本人；`Idempotency-Key` 重放返回原结果 |
+| 分析报告列表/详情 | `GET /api/v1/analysis-reports[/{id}]` | `analysis:read_assigned` | 作者 或 被指派决策员 |
+| 新建/编辑草稿 | `POST`、`PATCH /api/v1/analysis-reports[/{id}]` | `analysis:create`、`analysis:edit_own_draft` | 作者；引用侦察记录必须已指派给该作者 |
+| 提交并指派决策员 | `POST /api/v1/analysis-reports/{id}/submit` | `analysis:submit` | 作者；`ai_content_confirmed=true` 才放行 |
+
+要点：
+
+- **身份只从令牌来**：`owner_id` / `author_id` / `viewer_user_id` 由 Gateway 注入，浏览器传了也不认；
+- **侦察快照由服务端生成**：分析服务通过 `authorized-view?purpose=analysis` 取记录，写进 `report_recon_links` 的是不可变快照，不信任前端提交的内容；
+- **越权不泄露存在性**：无权的记录/报告按 `404` 处理，同时写 `*.read` 的 `denied` 审计；
+- **提交后不可改**：状态不是 `draft` 时 `PATCH` 返回 `409 WORKFLOW_CONFLICT`；版本不匹配返回 `409 VERSION_CONFLICT`；
+- **多分析员并存**：同一侦察记录可以有多份报告，互不覆盖；记录级状态只有全部指派完成后才汇总为 `analyzed`。
+
 ## 本地启动（Issue #7 起可用）
 
 共享库在 `services/_shared/nis_shared`（配置、数据库、错误体、健康检查、日志、密码哈希），

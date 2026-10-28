@@ -163,14 +163,70 @@ class IamClient:
         payload = self._http.request_json("GET", "/internal/v1/candidates", params=params)
         return payload.get("items", [])
 
-    def resolve(self, user_ids: list[str], required_role: str, request_id: str | None = None) -> list[dict[str, Any]]:
+    def resolve(
+        self,
+        user_ids: list[str],
+        required_role: str,
+        *,
+        token: str | None = None,
+        request_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """提交时二次校验接收人；必须带调用者令牌，IAM 侧会再验一次身份。"""
+
         payload = self._http.request_json(
             "POST",
             "/internal/v1/users/resolve",
             json_body={"user_ids": user_ids, "required_role": required_role},
+            token=token,
             request_id=request_id,
         )
         return payload.get("items", [])
+
+
+class ReconClient:
+    """分析服务读取侦察数据的唯一入口：必须走授权接口，不直连 nis_recon。"""
+
+    def __init__(self, base_url: str, *, transport: httpx.BaseTransport | None = None) -> None:
+        self._http = InternalClient(base_url, transport=transport, service_name="nis-service")
+
+    def authorized_view(
+        self,
+        record_id: str,
+        *,
+        requester_id: str,
+        purpose: str,
+        token: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._http.request_json(
+            "GET",
+            f"/internal/v1/recon-records/{record_id}/authorized-view",
+            token=token,
+            request_id=request_id,
+            params={"requester_user_id": requester_id, "purpose": purpose},
+        )
+
+    def analysis_state(
+        self,
+        record_id: str,
+        *,
+        analyst_id: str,
+        assignment_status: str,
+        reject_reason: str | None,
+        token: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._http.request_json(
+            "POST",
+            f"/internal/v1/recon-records/{record_id}/analysis-state",
+            token=token,
+            request_id=request_id,
+            json_body={
+                "analyst_id": analyst_id,
+                "assignment_status": assignment_status,
+                "reject_reason": reject_reason,
+            },
+        )
 
 
 class AuditClient:

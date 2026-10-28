@@ -44,7 +44,7 @@ def test_seed_creates_full_baseline(iam) -> None:
         "organizations": 5,
         "permissions": 18,
         "roles": 5,  # 四类标准角色 + 管理权限束
-        "role_permissions": 4 + 5 + 4 + 5 + 3,  # 见 rbac 第 3 节 + 管理权限束
+        "role_permissions": 5 + 6 + 5 + 5 + 3,  # 见 rbac 第 3 节 + 管理权限束
         "users": 8,
         "user_roles": 9,  # admin 两个角色
     }

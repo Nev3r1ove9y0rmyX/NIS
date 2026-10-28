@@ -23,10 +23,12 @@ from nis_shared.errors import ApiError
 FORWARD_HEADERS = ("X-Role-Context", "Idempotency-Key")
 
 
-def _iam_http(request: Request):  # noqa: ANN201
-    client = getattr(request.app.state, "iam_http", None)
+def _upstream_http(request: Request, upstream: str):  # noqa: ANN201
+    """按上游服务取对应的内部客户端（iam / recon / analysis / decision / execution / ai）。"""
+
+    client = getattr(request.app.state, f"{upstream}_http", None)
     if client is None:
-        raise ApiError("SERVICE_UNAVAILABLE", "IAM 客户端未配置")
+        raise ApiError("SERVICE_UNAVAILABLE", f"{upstream} 客户端未配置")
     return client
 
 
@@ -67,12 +69,13 @@ def forward(
     json_body: Any = None,
     params: dict[str, Any] | None = None,
     status: int | None = None,
+    upstream: str = "iam",
 ) -> tuple[int, Any]:
     """鉴权后转发到 IAM，返回 (状态码, 解析后的 JSON)。"""
 
     authenticate(request, public=public, permission=permission)
     headers = {name: request.headers[name] for name in FORWARD_HEADERS if name in request.headers}
-    response: httpx.Response = _iam_http(request).request(
+    response: httpx.Response = _upstream_http(request, upstream).request(
         method,
         path,
         token=_bearer(request),
