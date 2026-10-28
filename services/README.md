@@ -201,3 +201,17 @@ python -m pytest tests -q
 测试用内存 SQLite，不连开发者本机数据库；真实 MySQL 的迁移验证由
 `python scripts/migrate_all.py --verify` 完成（证据见 PR）。
 
+分层说明：
+
+| 文件 | 覆盖 |
+|---|---|
+| `tests/test_contract_alignment.py` | **契约一致性**：不许发明路由、不许静默漏实现、错误体与健康检查符合契约 |
+| `tests/test_health.py`、`test_models.py`、`test_seed.py` | 骨架、数据模型、种子 |
+| `tests/test_auth.py`、`test_rbac*` | 认证、令牌、角色上下文、权限即时生效 |
+| `tests/test_recon_analysis.py`、`test_decision_execution.py` | 四段业务链与状态机 |
+| `tests/test_audit_trace.py`、`test_audit_ingest.py` | 审计写入/查询/调用链与 AI 建议 |
+| `tests/test_gateway.py` | 网关转发、入口鉴权、错误体 |
+
+新增或修改路由后，`test_contract_alignment.py` 会强制你二选一：改契约（走评审），
+或把该路由登记进 `KNOWN_PENDING` / `KNOWN_EXTRA` 并写明原因。
+
