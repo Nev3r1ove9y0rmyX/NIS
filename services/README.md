@@ -54,3 +54,51 @@ python scripts/validate_contracts.py
 
 契约测试（B 的 P1 任务）应覆盖：响应字段与契约同名、错误码在契约表内、
 权限缺失返回 403、非法状态返回 409、重复幂等请求返回原结果。
+
+## 本地启动（Issue #7 起可用）
+
+共享库在 `services/_shared/nis_shared`（配置、数据库、错误体、健康检查、日志、密码哈希），
+每个服务的 `app/main.py` 只有十行左右：加载配置 → 建数据源 → 装配应用。
+
+```bash
+# 0. 一次准备：虚拟环境与依赖
+python -m venv .venv
+.venv/Scripts/python -m pip install -r services/requirements.txt
+
+# 1. 空库迁移（按数据模型第 12 节顺序：IAM → Audit → 四段业务 → AI）
+python scripts/migrate_all.py --verify
+
+# 2. 种子数据：5 个组织、18 个权限、5 个角色、8 个演示账号
+set NIS_ADMIN_PASSWORD=...      # 只放本地环境变量
+set NIS_DEMO_PASSWORD=...
+python scripts/seed_data.py
+
+# 3. 单独起某个服务（端口见 docs/service-catalog.md 第 1 节）
+cd services/iam-service
+set PYTHONPATH=..;..\_shared
+python -m uvicorn app.main:app --port 8001
+```
+
+健康检查是契约的一部分，任何服务都应满足：
+
+- `GET /health/live` → 200，进程存活即通过；
+- `GET /health/ready` → 200 或 503，503 时使用统一错误体并给出 `dependencies`；
+- 两者都回写 `X-Request-ID`，便于和审计事件对齐。
+
+## 代码约定
+
+- 业务代码分层：`app/api`（路由与参数校验）、`app/domain`（规则与状态转换）、
+  `app/db`（模型与会话，目前是 `app/models.py`）、`app/clients`（跨服务客户端）；
+- 共享库只放基础设施，**不放业务规则**；业务规则属于各自服务；
+- 报错一律 `raise ApiError("WORKFLOW_CONFLICT", ...)`，不要手写 JSONResponse 拼错误体；
+- 数据表字段名必须与 `docs/data-model.md` 一致，改名属于契约变更。
+
+## 测试
+
+```bash
+python -m pytest tests -q
+```
+
+测试用内存 SQLite，不连开发者本机数据库；真实 MySQL 的迁移验证由
+`python scripts/migrate_all.py --verify` 完成（证据见 PR）。
+
