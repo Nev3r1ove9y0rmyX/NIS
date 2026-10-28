@@ -1,0 +1,15 @@
+# 本地开发覆盖示例（Issue #17）
+# 用法：cp deploy/docker-compose.override.yml.example deploy/docker-compose.override.yml
+# compose 会自动叠加同名 override 文件；本文件不提交真实值。
+
+services:
+  mysql:
+    # 仅本机调试：把 3306 绑到回环，供宿主机客户端连接。
+    # DMZ/验收环境禁止启用（Issue #17 验收标准：3306 不映射）。
+    ports:
+      - "127.0.0.1:3306:3306"
+
+  # 开发期热更新源码（B 服务镜像支持时再启用）：
+  # iam-service:
+  #   volumes:
+  #     - ../services/iam-service/app:/app/app:ro

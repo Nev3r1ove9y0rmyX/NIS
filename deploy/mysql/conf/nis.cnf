@@ -1,0 +1,21 @@
+# NIS MySQL 服务端配置（挂载为 /etc/mysql/conf.d/nis.cnf）
+# 网络暴露控制不在本文件：MySQL 无宿主机端口映射，且仅挂在 internal 的
+# data_net 上（见 deploy/docker-compose.yml）。
+
+[mysqld]
+character-set-server = utf8mb4
+collation-server     = utf8mb4_0900_ai_ci
+# 容器内需监听全部接口供 data_net 内服务访问；
+# 访问边界 = data_net(internal) + 按账号授权 + 无端口映射。
+bind-address         = 0.0.0.0
+max_connections      = 200
+
+# 慢查询日志：验收与性能排查时改为 1（基线检查 SB-14 依赖项）
+slow_query_log       = 0
+long_query_time      = 1
+
+# 审计只追加原则的兜底：关闭对 nis_audit 未经授权的 UPDATE/DELETE 由账号权限
+# 控制（init/01），此处不做全局限制。
+
+[mysql]
+default-character-set = utf8mb4
