@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import uuid
 
@@ -28,7 +29,8 @@ class RecordingAudit:
 
 
 @pytest.fixture
-def stack():
+def stack(tmp_path, monkeypatch):
+    monkeypatch.setenv("EVIDENCE_ROOT", str(tmp_path))
     from nis_shared.clients import (
         AnalysisClient,
         DecisionClient,
@@ -497,6 +499,56 @@ def test_decision_maker_cannot_create_command_from_unassigned_report(stack) -> N
         },
     )
     assert response.status_code in (403, 404)
+
+
+def test_execution_evidence_download(stack, tmp_path) -> None:
+    """执行证据只对本人可见，且从受控目录流式返回（决策 D-02）。"""
+
+    client = stack["client"]
+    report = _prepare_report(client)
+    dm = login(client, "dmaker01")
+    execs = candidates(client, dm, "executor")
+    command = _make_command(client, dm, report["id"])
+    issued = _issue(client, dm, command, [execs["执行员甲"], execs["执行员乙"]]).json()
+    by_executor = {item["executor_id"]: item["assignment_id"] for item in issued["assignments"]}
+    a1 = by_executor[execs["执行员甲"]]
+
+    e1 = login(client, "exec01")
+    e2 = login(client, "exec02")
+
+    accepted = client.get(f"{API}/assignments/{a1}", headers=headers(e1)).json()
+    client.post(f"{API}/assignments/{a1}/accept", headers=headers(e1), json={"expected_version": accepted["version"]})
+    started = client.get(f"{API}/assignments/{a1}", headers=headers(e1)).json()
+    client.post(f"{API}/assignments/{a1}/start", headers=headers(e1), json={"expected_version": started["version"]})
+    running = client.get(f"{API}/assignments/{a1}", headers=headers(e1)).json()
+
+    payload = b"observation-log-bytes"
+    sha = hashlib.sha256(payload).hexdigest()
+    completed = client.post(
+        f"{API}/assignments/{a1}/complete",
+        headers=headers(e1),
+        json={
+            "expected_version": running["version"],
+            "outcome": "success",
+            "summary": "完成观察并留存记录。",
+            "evidence": [
+                {"file_name": "观察记录.txt", "media_type": "text/plain", "size_bytes": len(payload), "sha256": sha}
+            ],
+        },
+    )
+    assert completed.status_code == 200, completed.text
+    evidence_id = completed.json()["result"]["evidence"][0]["id"]
+
+    directory = tmp_path / "execution" / a1
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "观察记录.txt").write_bytes(payload)
+
+    mine = client.get(f"{API}/assignments/{a1}/evidence/{evidence_id}", headers=headers(e1))
+    assert mine.status_code == 200, mine.text
+    assert mine.content == payload
+
+    theirs = client.get(f"{API}/assignments/{a1}/evidence/{evidence_id}", headers=headers(e2))
+    assert theirs.status_code == 404
 
 
 def test_executor_cannot_read_command_of_others(stack) -> None:

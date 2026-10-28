@@ -12,7 +12,7 @@
 
 | 服务 | 端口 | 契约内接口 | 未实现 | 备注 |
 |---|---:|---|---|---|
-| API Gateway | 8000 | 全部 | 2 个证据下载 | 下载依赖受控目录（D-02） |
+| API Gateway | 8000 | 全部 | — | 含两个证据下载的受控代理 |
 | IAM & Organization | 8001 | 全部 | — | RS256 私钥只在此服务 |
 | Reconnaissance | 8002 | 全部 | — | 提交即指派，状态机 `draft→submitting→assigned` |
 | Analysis | 8003 | 全部 | — | 侦察快照由服务端生成 |
@@ -21,9 +21,9 @@
 | AI Assistance | 8006 | 全部 | — | 规则模板，`AI_ENABLED=false` 可降级 |
 | Audit | 8007 | 全部 | — | `audit_events` 只追加；查询需 `audit:read` |
 
-未实现的两个接口：`GET /api/v1/recon-records/{id}/evidence/{id}`、
-`GET /api/v1/assignments/{id}/evidence/{id}`，等 D 的受控目录与备份方案定稿后补
-（已在 `tests/test_contract_alignment.py` 的 `KNOWN_PENDING` 登记）。
+证据文件按决策 D-02 实现在受控目录（`EVIDENCE_ROOT`）：数据库只存元数据与 `storage_ref`，
+下载经业务接口鉴权后用 `FileResponse` 流式返回，路径解析拒绝绝对路径与 `..` 穿越，每次下载写
+`evidence.download` 审计（含 sha256）。
 
 ## 怎么跑（Windows 本地）
 
@@ -47,7 +47,7 @@ cd services/iam-service && set PYTHONPATH=..;..\_shared && python -m uvicorn app
 
 | 命令 | 结果 |
 |---|---|
-| `python -m pytest tests -q` | **123 passed** |
+| `python -m pytest tests -q` | **129 passed** |
 | `python scripts/validate_contracts.py` | 8 个文档 / 103 路径 / 127 操作，通过 |
 | `python scripts/check_doc_links.py` | 117 条相对链接通过 |
 | `python scripts/migrate_all.py --verify` | 7 个 Schema / 21 张表 |
@@ -78,7 +78,7 @@ cd services/iam-service && set PYTHONPATH=..;..\_shared && python -m uvicorn app
 | 审计账号需 `audit_trace_index` 的 UPDATE（`audit_events` 仍只追加） | D 同步 `deploy/mysql/init/` | 代码与检查脚本已就绪 |
 | `iam-service.yaml` 补 `DELETE /internal/v1/users/{id}/roles/{role_code}` | A | 已在 Issue #26 上报，代码已实现 |
 | Gateway 的 `submitAnalysisReport` 缺 `ai_content_confirmed` 字段 | A | 当前按 fail-closed（默认 false）实现 |
-| 证据下载的受控目录与备份范围 | D | 未开始 |
+| 证据下载的受控目录与备份范围 | D | 代码已实现（`EVIDENCE_ROOT`），待 D 挂卷与纳入备份 |
 | `X-Role-Context` 在 api-catalog 里仍写"可选" | A | 实现按"多角色必填"，已在 #26 上报 |
 
 ## 已知限制

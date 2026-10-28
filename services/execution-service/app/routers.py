@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app import service
@@ -15,6 +16,7 @@ from app.payloads import (
 from nis_shared.auth import Principal, get_principal, require_permission
 from nis_shared.errors import ApiError
 from nis_shared.pagination import PageQuery, page_query
+from nis_shared.storage import resolve_storage_path
 
 router = APIRouter(tags=["执行分配"])
 
@@ -292,3 +294,44 @@ def command_summary(
         "aggregate_status": aggregate,
         "items": items,
     }
+
+@router.get(
+    "/internal/v1/assignments/{assignment_id}/evidence/{evidence_id}",
+    summary="下载执行证据（受控目录，决策 D-02）",
+)
+def download_evidence(
+    assignment_id: str,
+    evidence_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_permission("command:read_assigned")),
+) -> FileResponse:
+    item = service.get_assignment(db, assignment_id)
+    try:
+        service.ensure_owner(item, principal.user_id)
+    except ApiError:
+        _audit(
+            request,
+            "evidence.download",
+            "denied",
+            principal=principal,
+            resource_id=evidence_id,
+            error_code="RESOURCE_NOT_FOUND",
+            details={"assignment_id": assignment_id},
+        )
+        raise
+
+    evidence = next((entry for entry in item.evidence if entry.id == evidence_id), None)
+    if evidence is None:
+        raise ApiError("RESOURCE_NOT_FOUND", "证据文件不存在")
+
+    path = resolve_storage_path(evidence.storage_ref)
+    _audit(
+        request,
+        "evidence.download",
+        "success",
+        principal=principal,
+        resource_id=evidence_id,
+        details={"assignment_id": assignment_id, "sha256": evidence.sha256},
+    )
+    return FileResponse(path, media_type=evidence.media_type, filename=evidence.file_name)
