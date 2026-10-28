@@ -28,6 +28,8 @@ node_modules/
 dist/
 .vite/
 coverage/
+# 本地 npm 缓存（部分同学把缓存目录指到工程内，避免误提交）
+.npm-cache/
 
 # IDE and OS
 .idea/
@@ -40,6 +42,8 @@ logs/
 data/
 backups/
 uploads/
+# 本地 SQLite 全栈开发数据（scripts/dev_stack.py 生成：库文件、日志、证据目录）
+.localdata/
 *.log
 *.sqlite
 *.db
