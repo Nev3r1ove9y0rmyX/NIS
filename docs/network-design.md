@@ -172,7 +172,7 @@ flowchart TB
 |---|---|---|---|
 | iKuai | https://10.0.1.1（仅 lan1） | 10.0.1.104 | 配置导出文件 + 虚拟机快照 |
 | srv-dmz-01 | ssh 10.1.1.20 | 10.0.1.104（FW-03） | Docker 重启脚本 + 数据库备份恢复 |
-| MySQL | 经 srv-dmz-01 `docker compose exec` | 仅宿主机本地 | 备份恢复脚本（`deploy/backup/`，随 Issue #18 交付） |
+| MySQL | 经 srv-dmz-01 `docker compose exec` | 仅宿主机本地 | [备份恢复脚本](../deploy/backup/README.md) |
 | Docker 网络 | 宿主机 docker 命令 | 仅宿主机本地 | `deploy/nis.sh` 重建 |
 
 - 所有管理凭据只存在 term-d 与 D 的密码管理位置，不进入仓库；
