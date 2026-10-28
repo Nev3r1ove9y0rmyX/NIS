@@ -40,14 +40,18 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: 安装校验依赖
+        # 契约与文档校验始终执行，不依赖 services/ 是否已合入。
+        run: python -m pip install --disable-pip-version-check pyyaml
+
       - name: 安装运行依赖
         if: hashFiles('services/requirements.txt') != ''
         run: python -m pip install --disable-pip-version-check -r services/requirements.txt
 
       - name: 安装测试依赖
-        # pytest 与 pyyaml 属于测试侧依赖，不在运行时 requirements 里。
+        # pytest 属于测试侧依赖，不在运行时 requirements 里。
         if: hashFiles('services/requirements.txt') != ''
-        run: python -m pip install --disable-pip-version-check pytest pyyaml
+        run: python -m pip install --disable-pip-version-check pytest
 
       - name: 运行测试
         # 测试使用内存 SQLite，不需要 MySQL 服务容器；真实 MySQL 验证在 D 的部署分支里做。
