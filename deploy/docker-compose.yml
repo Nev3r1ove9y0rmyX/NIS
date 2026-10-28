@@ -1,0 +1,406 @@
+# NIS 协同调度信息系统 —— 全栈编排
+# 负责人：D（Issue #17）。约定见 deploy/README.md 与 docs/soa-deployment.md。
+#
+# 网络分层：
+#   edge_net     前端 + 边缘代理 + Gateway（唯一对外出口）
+#   service_net  internal，服务间 REST
+#   data_net     internal，服务到 MySQL
+#
+# 使用方式（统一经 deploy/nis.sh，等价于）：
+#   docker compose --project-name nis --project-directory <仓库根> \
+#     --env-file <仓库根>/.env -f deploy/docker-compose.yml up -d --profile app
+#
+# 变量注入原则（deploy/README.md 规则 2）：每个服务只显式注入自身所需变量，
+# 不整包加载根 .env；数据库密码按 Schema 一一对应，跨服务不可见。
+#
+# Profile 说明：
+#   （无 profile）只启动 mysql —— B/C 开发期数据库就绪即可
+#   app          全栈（8 个服务 + 前端 + 边缘代理）—— 联调与验收
+#
+# 服务镜像由 B（Issue #7~#11）交付；交付前 --profile app 无法构建服务镜像，
+# mysql 可独立使用。健康检查端点对齐 docs/service-catalog.md。
+
+name: nis
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app-healthcheck: &app-healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 6
+  start_period: 20s
+
+x-live-probe: &live-probe
+  test: ["CMD-SHELL", "python -c \"import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:' + __import__('os').environ.get('SERVICE_PORT','8000') + '/health/live',timeout=3).status==200 else 1)\""]
+
+networks:
+  edge_net:
+    driver: bridge
+  service_net:
+    driver: bridge
+    internal: true
+  data_net:
+    driver: bridge
+    internal: true
+
+volumes:
+  mysql_data:
+
+secrets:
+  # 由 deploy/nis.sh gen-keys 生成；*.pem 已被 .gitignore 排除。
+  # 私钥只挂给 iam-service；其余服务只挂公钥（soa-deployment §5）。
+  jwt_private_key:
+    file: ./secrets/jwt_private.pem
+  jwt_public_key:
+    file: ./secrets/jwt_public.pem
+
+services:
+  # ==================== 数据层 ====================
+  mysql:
+    # 基于 mysql:8.4 构建：把 nis.cnf COPY 进镜像，
+    # 规避 bind mount 配置文件权限 777 被 mysqld 忽略的问题。
+    build: ./mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 设置 MYSQL_ROOT_PASSWORD}
+      # 供 init 脚本创建按 Schema 分权的账号（deploy/mysql/init/01-*）。
+      IAM_DB_USER: ${IAM_DB_USER:-nis_iam_app}
+      IAM_DB_PASSWORD: ${IAM_DB_PASSWORD:?请在 .env 设置 IAM_DB_PASSWORD}
+      IAM_DB_NAME: ${IAM_DB_NAME:-nis_iam}
+      IAM_MIGRATE_PASSWORD: ${IAM_MIGRATE_PASSWORD:?请在 .env 设置 IAM_MIGRATE_PASSWORD}
+      RECON_DB_USER: ${RECON_DB_USER:-nis_recon_app}
+      RECON_DB_PASSWORD: ${RECON_DB_PASSWORD:?请在 .env 设置 RECON_DB_PASSWORD}
+      RECON_DB_NAME: ${RECON_DB_NAME:-nis_recon}
+      RECON_MIGRATE_PASSWORD: ${RECON_MIGRATE_PASSWORD:?请在 .env 设置 RECON_MIGRATE_PASSWORD}
+      ANALYSIS_DB_USER: ${ANALYSIS_DB_USER:-nis_analysis_app}
+      ANALYSIS_DB_PASSWORD: ${ANALYSIS_DB_PASSWORD:?请在 .env 设置 ANALYSIS_DB_PASSWORD}
+      ANALYSIS_DB_NAME: ${ANALYSIS_DB_NAME:-nis_analysis}
+      ANALYSIS_MIGRATE_PASSWORD: ${ANALYSIS_MIGRATE_PASSWORD:?请在 .env 设置 ANALYSIS_MIGRATE_PASSWORD}
+      DECISION_DB_USER: ${DECISION_DB_USER:-nis_decision_app}
+      DECISION_DB_PASSWORD: ${DECISION_DB_PASSWORD:?请在 .env 设置 DECISION_DB_PASSWORD}
+      DECISION_DB_NAME: ${DECISION_DB_NAME:-nis_decision}
+      DECISION_MIGRATE_PASSWORD: ${DECISION_MIGRATE_PASSWORD:?请在 .env 设置 DECISION_MIGRATE_PASSWORD}
+      EXECUTION_DB_USER: ${EXECUTION_DB_USER:-nis_execution_app}
+      EXECUTION_DB_PASSWORD: ${EXECUTION_DB_PASSWORD:?请在 .env 设置 EXECUTION_DB_PASSWORD}
+      EXECUTION_DB_NAME: ${EXECUTION_DB_NAME:-nis_execution}
+      EXECUTION_MIGRATE_PASSWORD: ${EXECUTION_MIGRATE_PASSWORD:?请在 .env 设置 EXECUTION_MIGRATE_PASSWORD}
+      AI_DB_USER: ${AI_DB_USER:-nis_ai_app}
+      AI_DB_PASSWORD: ${AI_DB_PASSWORD:?请在 .env 设置 AI_DB_PASSWORD}
+      AI_DB_NAME: ${AI_DB_NAME:-nis_ai}
+      AI_MIGRATE_PASSWORD: ${AI_MIGRATE_PASSWORD:?请在 .env 设置 AI_MIGRATE_PASSWORD}
+      AUDIT_DB_USER: ${AUDIT_DB_USER:-nis_audit_app}
+      AUDIT_DB_PASSWORD: ${AUDIT_DB_PASSWORD:?请在 .env 设置 AUDIT_DB_PASSWORD}
+      AUDIT_DB_NAME: ${AUDIT_DB_NAME:-nis_audit}
+      AUDIT_MIGRATE_PASSWORD: ${AUDIT_MIGRATE_PASSWORD:?请在 .env 设置 AUDIT_MIGRATE_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # 配置 nis.cnf 已构建进镜像（见 mysql/Dockerfile）；不再 bind mount，
+      # 否则宿主机 777 权限会被 mysqld 以 world-writable 为由忽略。
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    networks: [data_net]
+    # 不映射宿主机端口：data_net 为 internal，仅服务容器可达（Issue #17 验收标准）。
+    # 本地调试用 deploy/docker-compose.override.yml.example 中的 127.0.0.1 绑定。
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 30s
+    logging: *default-logging
+
+  # ==================== 应用层（profile: app）====================
+
+  iam-service:
+    profiles: ["app"]
+    build: { context: ../services/iam-service }
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      SERVICE_PORT: "8001"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      IAM_DB_USER: ${IAM_DB_USER:-nis_iam_app}
+      IAM_DB_PASSWORD: ${IAM_DB_PASSWORD}
+      IAM_DB_NAME: ${IAM_DB_NAME:-nis_iam}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      JWT_ALG: ${JWT_ALG:-RS256}
+      JWT_KID: ${JWT_KID:-nis-key-1}
+      AUDIT_SERVICE_URL: http://audit-service:8007
+      HTTP_CONNECT_TIMEOUT: ${HTTP_CONNECT_TIMEOUT:-1}
+      HTTP_TOTAL_TIMEOUT: ${HTTP_TOTAL_TIMEOUT:-3}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?请在 .env 设置 INTERNAL_SERVICE_TOKEN}
+    secrets:
+      - source: jwt_private_key
+        target: jwt_private.pem
+      - source: jwt_public_key
+        target: jwt_public.pem
+    networks: [service_net, data_net]
+    depends_on:
+      mysql: { condition: service_healthy }
+    healthcheck:
+      <<: [*live-probe, *app-healthcheck]
+    logging: *default-logging
+
+  audit-service:
+    profiles: ["app"]
+    build: { context: ../services/audit-service }
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      SERVICE_PORT: "8007"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      AUDIT_DB_USER: ${AUDIT_DB_USER:-nis_audit_app}
+      AUDIT_DB_PASSWORD: ${AUDIT_DB_PASSWORD}
+      AUDIT_DB_NAME: ${AUDIT_DB_NAME:-nis_audit}
+      HTTP_CONNECT_TIMEOUT: ${HTTP_CONNECT_TIMEOUT:-1}
+      HTTP_TOTAL_TIMEOUT: ${HTTP_TOTAL_TIMEOUT:-3}
+    secrets:
+      - source: jwt_public_key
+        target: jwt_public.pem
+    networks: [service_net, data_net]
+    depends_on:
+      mysql: { condition: service_healthy }
+    healthcheck:
+      <<: [*live-probe, *app-healthcheck]
+    logging: *default-logging
+
+  recon-service:
+    profiles: ["app"]
+    build: { context: ../services/recon-service }
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      SERVICE_PORT: "8002"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      RECON_DB_USER: ${RECON_DB_USER:-nis_recon_app}
+      RECON_DB_PASSWORD: ${RECON_DB_PASSWORD}
+      RECON_DB_NAME: ${RECON_DB_NAME:-nis_recon}
+      IAM_SERVICE_URL: http://iam-service:8001
+      AI_SERVICE_URL: http://ai-service:8006
+      AUDIT_SERVICE_URL: http://audit-service:8007
+      HTTP_CONNECT_TIMEOUT: ${HTTP_CONNECT_TIMEOUT:-1}
+      HTTP_TOTAL_TIMEOUT: ${HTTP_TOTAL_TIMEOUT:-3}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-15}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+    secrets:
+      - source: jwt_public_key
+        target: jwt_public.pem
+    networks: [service_net, data_net]
+    depends_on:
+      mysql: { condition: service_healthy }
+      iam-service: { condition: service_healthy }
+    healthcheck:
+      <<: [*live-probe, *app-healthcheck]
+    logging: *default-logging
+
+  analysis-service:
+    profiles: ["app"]
+    build: { context: ../services/analysis-service }
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      SERVICE_PORT: "8003"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      ANALYSIS_DB_USER: ${ANALYSIS_DB_USER:-nis_analysis_app}
+      ANALYSIS_DB_PASSWORD: ${ANALYSIS_DB_PASSWORD}
+      ANALYSIS_DB_NAME: ${ANALYSIS_DB_NAME:-nis_analysis}
+      IAM_SERVICE_URL: http://iam-service:8001
+      RECON_SERVICE_URL: http://recon-service:8002
+      AI_SERVICE_URL: http://ai-service:8006
+      AUDIT_SERVICE_URL: http://audit-service:8007
+      HTTP_CONNECT_TIMEOUT: ${HTTP_CONNECT_TIMEOUT:-1}
+      HTTP_TOTAL_TIMEOUT: ${HTTP_TOTAL_TIMEOUT:-3}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-15}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+    secrets:
+      - source: jwt_public_key
+        target: jwt_public.pem
+    networks: [service_net, data_net]
+    depends_on:
+      mysql: { condition: service_healthy }
+      iam-service: { condition: service_healthy }
+    healthcheck:
+      <<: [*live-probe, *app-healthcheck]
+    logging: *default-logging
+
+  decision-service:
+    profiles: ["app"]
+    build: { context: ../services/decision-service }
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      SERVICE_PORT: "8004"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      DECISION_DB_USER: ${DECISION_DB_USER:-nis_decision_app}
+      DECISION_DB_PASSWORD: ${DECISION_DB_PASSWORD}
+      DECISION_DB_NAME: ${DECISION_DB_NAME:-nis_decision}
+      IAM_SERVICE_URL: http://iam-service:8001
+      ANALYSIS_SERVICE_URL: http://analysis-service:8003
+      EXECUTION_SERVICE_URL: http://execution-service:8005
+      AUDIT_SERVICE_URL: http://audit-service:8007
+      HTTP_CONNECT_TIMEOUT: ${HTTP_CONNECT_TIMEOUT:-1}
+      HTTP_TOTAL_TIMEOUT: ${HTTP_TOTAL_TIMEOUT:-3}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+    secrets:
+      - source: jwt_public_key
+        target: jwt_public.pem
+    networks: [service_net, data_net]
+    depends_on:
+      mysql: { condition: service_healthy }
+      iam-service: { condition: service_healthy }
+      execution-service: { condition: service_started }
+    healthcheck:
+      <<: [*live-probe, *app-healthcheck]
+    logging: *default-logging
+
+  execution-service:
+    profiles: ["app"]
+    build: { context: ../services/execution-service }
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      SERVICE_PORT: "8005"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      EXECUTION_DB_USER: ${EXECUTION_DB_USER:-nis_execution_app}
+      EXECUTION_DB_PASSWORD: ${EXECUTION_DB_PASSWORD}
+      EXECUTION_DB_NAME: ${EXECUTION_DB_NAME:-nis_execution}
+      IAM_SERVICE_URL: http://iam-service:8001
+      AI_SERVICE_URL: http://ai-service:8006
+      AUDIT_SERVICE_URL: http://audit-service:8007
+      HTTP_CONNECT_TIMEOUT: ${HTTP_CONNECT_TIMEOUT:-1}
+      HTTP_TOTAL_TIMEOUT: ${HTTP_TOTAL_TIMEOUT:-3}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-15}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+    secrets:
+      - source: jwt_public_key
+        target: jwt_public.pem
+    networks: [service_net, data_net]
+    depends_on:
+      mysql: { condition: service_healthy }
+      iam-service: { condition: service_healthy }
+    healthcheck:
+      <<: [*live-probe, *app-healthcheck]
+    logging: *default-logging
+
+  ai-service:
+    profiles: ["app"]
+    build: { context: ../services/ai-service }
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      SERVICE_PORT: "8006"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      AI_DB_USER: ${AI_DB_USER:-nis_ai_app}
+      AI_DB_PASSWORD: ${AI_DB_PASSWORD}
+      AI_DB_NAME: ${AI_DB_NAME:-nis_ai}
+      AI_PROVIDER: ${AI_PROVIDER:-local}
+      AI_BASE_URL: ${AI_BASE_URL:-http://127.0.0.1:11434}
+      AI_MODEL: ${AI_MODEL:-qwen2.5:7b}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AUDIT_SERVICE_URL: http://audit-service:8007
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-15}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+    secrets:
+      - source: jwt_public_key
+        target: jwt_public.pem
+    networks: [service_net, data_net]
+    depends_on:
+      mysql: { condition: service_healthy }
+    healthcheck:
+      <<: [*live-probe, *app-healthcheck]
+    logging: *default-logging
+
+  api-gateway:
+    profiles: ["app"]
+    build: { context: ../services/api-gateway }
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_LOG_LEVEL: ${APP_LOG_LEVEL:-INFO}
+      SERVICE_PORT: "8000"
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+      GATEWAY_RATE_LIMIT_PER_MINUTE: ${GATEWAY_RATE_LIMIT_PER_MINUTE:-120}
+      GATEWAY_MAX_BODY_BYTES: ${GATEWAY_MAX_BODY_BYTES:-2097152}
+      IAM_SERVICE_URL: http://iam-service:8001
+      RECON_SERVICE_URL: http://recon-service:8002
+      ANALYSIS_SERVICE_URL: http://analysis-service:8003
+      DECISION_SERVICE_URL: http://decision-service:8004
+      EXECUTION_SERVICE_URL: http://execution-service:8005
+      AI_SERVICE_URL: http://ai-service:8006
+      AUDIT_SERVICE_URL: http://audit-service:8007
+      HTTP_CONNECT_TIMEOUT: ${HTTP_CONNECT_TIMEOUT:-1}
+      HTTP_TOTAL_TIMEOUT: ${HTTP_TOTAL_TIMEOUT:-3}
+      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-15}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+    networks: [edge_net, service_net]
+    depends_on:
+      iam-service: { condition: service_healthy }
+      audit-service: { condition: service_healthy }
+      recon-service: { condition: service_started }
+      analysis-service: { condition: service_started }
+      decision-service: { condition: service_started }
+      execution-service: { condition: service_started }
+      ai-service: { condition: service_started }
+    healthcheck:
+      <<: [*live-probe, *app-healthcheck]
+    logging: *default-logging
+
+  frontend:
+    profiles: ["app"]
+    build:
+      context: ../frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:?请在 .env 设置 VITE_API_BASE_URL}
+    restart: unless-stopped
+    networks: [edge_net]
+    depends_on:
+      api-gateway: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    logging: *default-logging
+
+  # ==================== 边缘入口（profile: app）====================
+  edge-proxy:
+    image: nginx:1.27-alpine
+    profiles: ["app"]
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      # HTTPS：启用 deploy/nginx/conf.d/nis.conf 中 443 段与证书后打开：
+      # - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # - ./nginx/certs:/etc/nginx/certs:ro
+    networks: [edge_net]
+    depends_on:
+      frontend: { condition: service_healthy }
+      api-gateway: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    logging: *default-logging
