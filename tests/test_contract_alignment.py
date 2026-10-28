@@ -33,13 +33,8 @@ CONTRACTS = {
 }
 
 #: 实现了但契约里还没有的路由：必须有跟进 Issue，修完后从清单删除。
-KNOWN_EXTRA: set[tuple[str, str, str]] = {
-    # Gateway 契约有 revokeUserRole，但 iam-service.yaml 缺内部路由；等 A 补（Issue #26）
-    ("iam-service", "DELETE", "/internal/v1/users/{user_id}/roles/{role_code}"),
-    # 证据下载需要业务服务先鉴权再流式返回，两个内部路由同样缺契约条目（Issue #26 同类问题）
-    ("recon-service", "GET", "/internal/v1/recon-records/{record_id}/evidence/{evidence_id}"),
-    ("execution-service", "GET", "/internal/v1/assignments/{assignment_id}/evidence/{evidence_id}"),
-}
+#: 2026-10-28：3 条内部路由已随 PR #37 补入契约（Issue #26 关闭），清单清空。
+KNOWN_EXTRA: set[tuple[str, str, str]] = set()
 
 #: 契约里有但本期未实现的路由：必须写清原因，防止「忘了」。
 KNOWN_PENDING: set[tuple[str, str, str]] = set()
