@@ -107,6 +107,27 @@ def create_record(
 - **提交后不可改**：状态不是 `draft` 时 `PATCH` 返回 `409 WORKFLOW_CONFLICT`；版本不匹配返回 `409 VERSION_CONFLICT`；
 - **多分析员并存**：同一侦察记录可以有多份报告，互不覆盖；记录级状态只有全部指派完成后才汇总为 `analyzed`。
 
+## 决策与执行（Issue #10 起可用）
+
+| 操作 | 入口 | 权限 | 关键规则 |
+|---|---|---|---|
+| 指令列表/详情/状态 | `GET /api/v1/commands[/{id}][/status]` | `command:read_assigned` | 本人创建 或 被指派执行员 |
+| 新建/编辑草稿 | `POST`、`PATCH /api/v1/commands[/{id}]` | `command:create` | 依据报告必须已指派给本人 |
+| 冲突检查 | `GET /api/v1/commands/conflicts` | `command:issue` | 同一依据报告或同一目标上的活动指令 |
+| 下达 | `POST /api/v1/commands/{id}/issue` | `command:issue` | 有冲突必须 `conflict_acknowledged=true`，否则 409 |
+| 取消 | `POST /api/v1/commands/{id}/cancel` | `command:issue` | 已有完成结果的不能取消 |
+| 我的执行任务 | `GET /api/v1/assignments[/{id}]` | `command:read_assigned` | 只看自己的分配，他人分配返回 404 |
+| 接收/拒绝/开始/完成 | `POST /api/v1/assignments/{id}/{accept,reject,start,complete}` | `execution:respond/update/submit` | 状态机校验 + 版本校验 |
+
+**总体状态只有一个计算入口**（决策 D-01）：
+
+- `commands.status` 只由 decision-service 的 `recompute_status()` 重算；
+- 重算时机只有 `confirm-issue` 与每次 `assignment-state` 回写；
+- execution-service 不计算、不保存总体状态；`GET /commands/{id}/summary` 的 `aggregate_status` 是从决策侧读来的；
+- 每次重算写一条 `command.status.recalculated` 审计。
+
+**下达是跨服务流程**（architecture §7）：决策服务校验执行员 → 调 Execution 建个人分配 → 回写本地摘要 → 状态汇总为 `issued`；Execution 不可用时指令落 `compensation_required`，不会显示为已下达。
+
 ## 本地启动（Issue #7 起可用）
 
 共享库在 `services/_shared/nis_shared`（配置、数据库、错误体、健康检查、日志、密码哈希），

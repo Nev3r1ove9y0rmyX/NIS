@@ -229,6 +229,106 @@ class ReconClient:
         )
 
 
+class AnalysisClient:
+    """决策服务读取分析报告的唯一入口：必须走授权接口。"""
+
+    def __init__(self, base_url: str, *, transport: httpx.BaseTransport | None = None) -> None:
+        self._http = InternalClient(base_url, transport=transport, service_name="decision-service")
+
+    def authorized_view(
+        self,
+        report_id: str,
+        *,
+        requester_id: str,
+        purpose: str,
+        token: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._http.request_json(
+            "GET",
+            f"/internal/v1/analysis-reports/{report_id}/authorized-view",
+            token=token,
+            request_id=request_id,
+            params={"requester_user_id": requester_id, "purpose": purpose},
+        )
+
+    def decision_state(
+        self,
+        report_id: str,
+        *,
+        state: str,
+        command_id: str | None,
+        reason: str | None,
+        token: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._http.request_json(
+            "POST",
+            f"/internal/v1/analysis-reports/{report_id}/decision-state",
+            token=token,
+            request_id=request_id,
+            json_body={"state": state, "command_id": command_id, "reason": reason},
+        )
+
+
+class ExecutionClient:
+    """决策服务创建个人执行分配的唯一入口（architecture §7：DEC -> EXE）。"""
+
+    def __init__(self, base_url: str, *, transport: httpx.BaseTransport | None = None) -> None:
+        self._http = InternalClient(base_url, transport=transport, service_name="decision-service")
+
+    def create_assignments(
+        self, payload: dict[str, Any], *, token: str, request_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        body = self._http.request_json(
+            "POST",
+            "/internal/v1/assignments",
+            json_body=payload,
+            token=token,
+            request_id=request_id,
+        )
+        return body.get("items", [])
+
+
+class DecisionClient:
+    """执行服务回写个人状态与读取总体状态的唯一入口。"""
+
+    def __init__(self, base_url: str, *, transport: httpx.BaseTransport | None = None) -> None:
+        self._http = InternalClient(base_url, transport=transport, service_name="execution-service")
+
+    def apply_assignment_state(
+        self,
+        command_id: str,
+        *,
+        assignment_id: str,
+        executor_id: str,
+        status: str,
+        token: str,
+        request_id: str | None = None,
+    ) -> dict[str, Any]:
+        return self._http.request_json(
+            "POST",
+            f"/internal/v1/commands/{command_id}/assignment-state",
+            json_body={
+                "assignment_id": assignment_id,
+                "executor_id": executor_id,
+                "status": status,
+            },
+            token=token,
+            request_id=request_id,
+        )
+
+    def get_status(
+        self, command_id: str, *, token: str, request_id: str | None = None
+    ) -> dict[str, Any]:
+        return self._http.request_json(
+            "GET",
+            f"/internal/v1/commands/{command_id}/status",
+            token=token,
+            request_id=request_id,
+        )
+
+
 class AuditClient:
     """写审计事件到 audit-service；失败只记日志，不影响业务结果，但会显式告警。"""
 
