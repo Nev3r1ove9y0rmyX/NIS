@@ -95,6 +95,37 @@ powershell -File scripts/bootstrap-github.ps1 -DryRun
 powershell -File scripts/bootstrap-github.ps1
 ```
 
+## 前端与联调（成员 C）
+
+前端已从“内存原型”升级为**连接真实接口**的版本：Vue 3 + Vite + TypeScript，类型由
+[公共 API 契约](contracts/openapi/api-gateway.yaml) 生成，浏览器只与 Gateway 同源通信。
+
+- 用户操作说明（四角色、常见错误、演示脚本）：[docs/user-guide.md](docs/user-guide.md)
+- 联调清单、实现约定与待确认缺口（G1–G6）：[docs/frontend-integration.md](docs/frontend-integration.md)
+- 验证记录与截图索引：[evidence/frontend-c-validation.md](evidence/frontend-c-validation.md)
+
+```powershell
+# 1) 后端栈：本机不想开 Docker 时用开发启动器（SQLite，不改服务代码）
+python -m venv .venv; .\.venv\Scripts\python -m pip install -r services/requirements.txt
+python scripts/dev_stack.py init      # 建表 + IAM 种子（需先在 .env 设 NIS_ADMIN_PASSWORD/NIS_DEMO_PASSWORD）
+python scripts/dev_stack.py run       # 起 8 个服务
+python scripts/dev_stack.py status    # 逐个 /health/ready
+
+# 2) 前端
+cd frontend
+npm install
+Copy-Item .env.example .env           # VITE_API_BASE_URL=/api/v1，Vite 反代到 Gateway
+npm run dev
+
+# 3) 检查与验收
+npm run check                          # lint + 类型 + 22 项测试 + 构建
+npm run generate:api                   # 契约变更后重新生成类型
+python tests/ui/e2e_four_roles.py      # 四角色真实链路验收，产出 evidence/screenshots
+```
+
+正式部署仍按 [deploy/README.md](deploy/README.md) 用 Docker Compose + MySQL；前端同源反代由
+`deploy/nginx/conf.d/nis.conf` 承担，所以后端不需要开 CORS。
+
 ## 第一阶段完成标准
 
 1. 四类角色能够登录，并受到前后端双重权限控制。

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.payloads import LoginRequest, RefreshRequest
 from app.proxy import forward
@@ -56,7 +56,7 @@ def refresh_token(payload: RefreshRequest, request: Request) -> JSONResponse:
 
 
 @router.post("/auth/logout", status_code=204, summary="退出登录")
-def logout(request: Request) -> JSONResponse:
+def logout(request: Request) -> Response:
     principal = get_principal(request)
     audit = getattr(request.app.state, "audit", None)
     if audit is not None:
@@ -70,7 +70,9 @@ def logout(request: Request) -> JSONResponse:
             source_ip=request.client.host if request.client else None,
         )
     # 无状态退出：客户端丢弃令牌；令牌仍受 TTL 与每请求账号状态检查约束。
-    return JSONResponse(None, status_code=204)
+    # 204 必须没有响应体：JSONResponse(None) 会写出字面量 "null"，uvicorn 抛
+    # RuntimeError("Response content longer than Content-Length")，浏览器侧表现为请求失败。
+    return Response(status_code=204)
 
 
 @router.get("/auth/me", summary="当前身份")

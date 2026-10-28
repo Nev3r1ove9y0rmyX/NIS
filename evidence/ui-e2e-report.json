@@ -1,0 +1,169 @@
+{
+  "base_url": "http://127.0.0.1:5175",
+  "steps": [
+    {
+      "step": "侦察员登录并进入工作台",
+      "ok": true,
+      "seconds": 1.5
+    },
+    {
+      "step": "侦察工作台截图 1920×1080",
+      "ok": true,
+      "seconds": 1.1
+    },
+    {
+      "step": "侦察工作台窄屏截图 1366×768",
+      "ok": true,
+      "seconds": 0.6
+    },
+    {
+      "step": "新建侦察记录并保存草稿",
+      "ok": true,
+      "seconds": 0.6
+    },
+    {
+      "step": "请求 AI 建议并人工接受",
+      "ok": true,
+      "seconds": 0.7
+    },
+    {
+      "step": "侦察面板（含 AI 结论）截图",
+      "ok": true,
+      "seconds": 0.5
+    },
+    {
+      "step": "提交侦察记录并指派分析员",
+      "ok": true,
+      "seconds": 1.1
+    },
+    {
+      "step": "关闭面板并确认列表状态",
+      "ok": true,
+      "seconds": 0.5
+    },
+    {
+      "step": "退出并登录分析员",
+      "ok": true,
+      "seconds": 1.2
+    },
+    {
+      "step": "分析工作台截图",
+      "ok": true,
+      "seconds": 0.7
+    },
+    {
+      "step": "分析员创建报告草稿",
+      "ok": true,
+      "seconds": 0.7
+    },
+    {
+      "step": "AI 建议人工修改后采用",
+      "ok": true,
+      "seconds": 1.0
+    },
+    {
+      "step": "分析面板（含 AI 修改）截图",
+      "ok": true,
+      "seconds": 0.4
+    },
+    {
+      "step": "提交分析报告并指派决策员",
+      "ok": true,
+      "seconds": 1.3
+    },
+    {
+      "step": "关闭分析面板",
+      "ok": true,
+      "seconds": 0.2
+    },
+    {
+      "step": "退出并登录决策员",
+      "ok": true,
+      "seconds": 1.4
+    },
+    {
+      "step": "决策工作台截图",
+      "ok": true,
+      "seconds": 0.7
+    },
+    {
+      "step": "决策员创建指令草稿",
+      "ok": true,
+      "seconds": 0.5
+    },
+    {
+      "step": "冲突检查并下达指令",
+      "ok": true,
+      "seconds": 2.1
+    },
+    {
+      "step": "关闭指令面板并确认状态",
+      "ok": true,
+      "seconds": 1.0
+    },
+    {
+      "step": "退出并登录执行员",
+      "ok": true,
+      "seconds": 1.2
+    },
+    {
+      "step": "执行工作台截图",
+      "ok": true,
+      "seconds": 0.7
+    },
+    {
+      "step": "接收 → 开始 → 提交执行结果",
+      "ok": true,
+      "seconds": 1.8
+    },
+    {
+      "step": "关闭执行面板并确认完成",
+      "ok": true,
+      "seconds": 1.0
+    },
+    {
+      "step": "退出并重新登录决策员回看结果",
+      "ok": true,
+      "seconds": 1.2
+    },
+    {
+      "step": "决策员查看指令状态与执行结果",
+      "ok": true,
+      "seconds": 1.7
+    },
+    {
+      "step": "退出并登录侦察员验证越权页面",
+      "ok": true,
+      "seconds": 1.2
+    },
+    {
+      "step": "侦察员访问决策工作台被拦截",
+      "ok": true,
+      "seconds": 0.8
+    },
+    {
+      "step": "退出并登录管理员（管理权限束）",
+      "ok": true,
+      "seconds": 1.7
+    },
+    {
+      "step": "审计工作台截图",
+      "ok": true,
+      "seconds": 1.1
+    },
+    {
+      "step": "按请求 ID 还原调用链",
+      "ok": true,
+      "seconds": 1.2
+    }
+  ],
+  "console_errors": [],
+  "failed_requests": [],
+  "aborted_by_navigation": [
+    "GET http://127.0.0.1:5175/api/v1/recon-records?status=analyzed&page_size=1",
+    "GET http://127.0.0.1:5175/api/v1/recon-records?status=draft&page_size=1",
+    "GET http://127.0.0.1:5175/api/v1/recon-records?page=1&page_size=10",
+    "GET http://127.0.0.1:5175/api/v1/recon-records?status=assigned&page_size=1"
+  ],
+  "ok": true
+}
