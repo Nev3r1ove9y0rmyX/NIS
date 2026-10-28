@@ -64,12 +64,17 @@ components:
 
     RoleCode:
       type: string
-      description: 四类标准业务角色代码，与 docs/rbac.md 一致。
+      description: |
+        角色代码。前四类是标准业务角色（与 docs/rbac.md 一致）；`administrator` 是
+        **系统管理角色**（只承载 iam:manage / organization:manage / audit:read 等管理权限），
+        不参与 OODA 业务流转，也不能作为业务候选接收人。多角色用户携带的角色上下文必须
+        来自其实际持有的角色代码（决策 D-03）。
       enum:
         - reconnaissance
         - analyst
         - decision_maker
         - executor
+        - administrator
 
     Priority:
       type: string

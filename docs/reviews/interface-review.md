@@ -114,3 +114,4 @@
 |---|---|---|---|---|
 | 2026-10-27 | 1.0 | 首次冻结：D-01 至 D-06 落地；新增证据文件下载接口；`X-Role-Context` 多角色必填；补 `423 ACCOUNT_LOCKED` | #6 | A |
 | 2026-10-27 | 1.0.1 | 一致性修订：api-catalog 的 `X-Role-Context` 口径改为多角色必填；接口计数更新为 103/127、公共 52；ADR-002 状态改为已接受并登记残留风险；补 3 条已实现路由的内部契约（`DELETE` 用户角色、recon/execution 证据下载）；`nis_audit_app` 对 `audit_trace_index` 单独授予 `UPDATE` | #26 | A |
+| 2026-10-28 | 1.0.2 | 端到端联调发现：实现中存在第 5 个角色代码 `administrator`（系统管理角色，可作 `X-Role-Context`），而 `RoleCode` 枚举只有 4 个业务角色。枚举补 `administrator` 并注明它不参与业务流转、不作为候选接收人；RBAC 第 1 节补系统管理角色归属。`seed_demo_data.py` 同步按 D-03 为多角色账号携带角色上下文 | #19 | A |

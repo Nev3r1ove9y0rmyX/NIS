@@ -4,10 +4,12 @@
 
 2026-10-28 更新：后端 8 个服务与 D 的部署交付已全部合入 `develop`（`pytest` 129 passed），因此除 E02 外统一改为 `待测试`——表示“实现已合并、等待联调或现场验证”，仍需按计划测试列逐条留下证据后改为 `通过`。网络相关用例的现场配置由 D 在 Issue #16/#17 跟踪。
 
+2026-10-28 联调：TC-B01、TC-B02、TC-B12、TC-B13 已在本地 SQLite 全栈上按计划测试并留证（`evidence/TC-B01`、`TC-B02`、`TC-B12`、`TC-B13`），标为 `通过`；MySQL 8 与浏览器走查由 D 的部署环境与现场排练复验。
+
 | 验收项 | 需求 | 设计依据 | 主责 | 计划测试 | 当前状态 |
 |---|---|---|---|---|---|
-| TC-B01 中心数据库与数据存储 | FR-RECON-003、FR-ANALYSIS-004、FR-DECISION-003、FR-EXEC-002 | architecture §4 | B、D | 四环节提交后核对数据库 | 待测试 |
-| TC-B02 日志完整性 | FR-AUDIT-001~003 | rbac §6、workflow §1 | B、D | 执行正常/失败操作并核对日志 | 待测试 |
+| TC-B01 中心数据库与数据存储 | FR-RECON-003、FR-ANALYSIS-004、FR-DECISION-003、FR-EXEC-002 | architecture §4 | B、D | 四环节提交后核对数据库 | 通过 |
+| TC-B02 日志完整性 | FR-AUDIT-001~003 | rbac §6、workflow §1 | B、D | 执行正常/失败操作并核对日志 | 通过 |
 | TC-B03 三个网络区域 | NFR-NET-001 | architecture §6、network-lab-plan | D | 查看三域网段和网关 | 待测试 |
 | TC-B04 内网访问外网和 DMZ | NFR-NET-001 | architecture §6 | D | 内网 HTTP/连通测试 | 待测试 |
 | TC-B05 外网访问 DMZ | NFR-NET-001 | architecture §6 | D | 外网访问映射服务 | 待测试 |
@@ -16,8 +18,8 @@
 | TC-B09 RBAC 越权拦截 | FR-AUTH-005 | rbac §4~§7 | B、C | 页面、数据、API 越权矩阵 | 待测试 |
 | TC-B10 用户/角色/权限分离 | FR-AUTH-003 | rbac §1 | B、C | 后台配置角色权限并验证继承 | 待测试 |
 | TC-B11 多对多映射 | FR-AUTH-004 | rbac §1、§5 | B、C | 多用户同角色、多角色用户 | 待测试 |
-| TC-B12 完整 OODA | FR-RECON-*、FR-ANALYSIS-*、FR-DECISION-*、FR-EXEC-* | workflow、architecture §5 | 全员 | 四账号完整闭环及入库 | 待测试 |
-| TC-B13 AI + 人在回路 | FR-RECON-002、FR-ANALYSIS-003、FR-DECISION-002、FR-EXEC-003、NFR-AI-001 | workflow §7 | A、B、C | 四环节建议、确认、降级 | 待测试 |
+| TC-B12 完整 OODA | FR-RECON-*、FR-ANALYSIS-*、FR-DECISION-*、FR-EXEC-* | workflow、architecture §5 | 全员 | 四账号完整闭环及入库 | 通过 |
+| TC-B13 AI + 人在回路 | FR-RECON-002、FR-ANALYSIS-003、FR-DECISION-002、FR-EXEC-003、NFR-AI-001 | workflow §7 | A、B、C | 四环节建议、确认、降级 | 通过 |
 | TC-B14 多角色多用户调度 | FR-AUTH-004、FR-ORG-002 | rbac §4~§5 | A、B、C | 同角色多账号选择与并行流转 | 待测试 |
 | TC-B15 组织候选筛选 | FR-ORG-001~002 | rbac §4 | A、B、C | 组织匹配/不匹配候选列表 | 待测试 |
 | TC-SOA01 Gateway 唯一入口 | NFR-SOA-001 | architecture §11、soa-deployment | B、D | 外网只能访问 Gateway，内部端口拒绝 | 待测试 |
