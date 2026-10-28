@@ -23,8 +23,17 @@ class Database:
             raise ValueError("数据库 URL 为空：请检查服务配置或 <PREFIX>_DB_URL")
         self.url = url
         if url.startswith("sqlite"):
+            # 内存库必须共用同一个连接，否则每个连接（含 TestClient 的线程）都会看到空库
+            from sqlalchemy.pool import StaticPool  # noqa: PLC0415
+
+            pool_kwargs = (
+                {"poolclass": StaticPool} if ":memory:" in url else {}
+            )
             self.engine: Engine = create_engine(
-                url, future=True, connect_args={"check_same_thread": False}
+                url,
+                future=True,
+                connect_args={"check_same_thread": False},
+                **pool_kwargs,
             )
         else:
             self.engine = create_engine(

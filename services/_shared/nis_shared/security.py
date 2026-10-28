@@ -11,12 +11,14 @@ JWT 签发与验签属于 Issue #8（登录认证），不放在这里。
 from __future__ import annotations
 
 import hmac
+import os
 import secrets
 
 import bcrypt
 
-#: bcrypt 单次哈希代价。12 轮在课程环境（单机四终端）延迟约 0.2 秒。
-BCRYPT_ROUNDS = 12
+#: bcrypt 单次哈希代价。12 轮在课程环境（单机四终端）延迟约 0.2 秒；
+#: 测试用 ``NIS_BCRYPT_ROUNDS=4`` 加速，生产环境不要下调。
+BCRYPT_ROUNDS = int(os.environ.get("NIS_BCRYPT_ROUNDS", "12"))
 
 #: bcrypt 只处理前 72 字节，超长口令先截断再由哈希函数加盐，避免静默截断带来的歧义。
 _MAX_PASSWORD_BYTES = 72

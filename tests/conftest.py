@@ -28,6 +28,9 @@ if str(SERVICES_DIR / "_shared") not in sys.path:
 for _prefix in ("IAM", "RECON", "ANALYSIS", "DECISION", "EXECUTION", "AI", "AUDIT"):
     os.environ.setdefault(f"{_prefix}_DB_URL", "sqlite+pysqlite:///:memory:")
 
+#: 测试里降低 bcrypt 代价，避免每个用例都花 0.2 秒做哈希（生产默认仍为 12）。
+os.environ.setdefault("NIS_BCRYPT_ROUNDS", "4")
+
 #: 服务名 → (models 模块或 None, main 模块, 该服务的 app* 模块快照)
 _CACHE: dict[str, tuple[ModuleType | None, ModuleType, dict[str, ModuleType]]] = {}
 

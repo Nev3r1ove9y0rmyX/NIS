@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, Column, DateTime, Integer, String
-from sqlalchemy.dialects import mysql
+from sqlalchemy.dialects import mysql, sqlite
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -23,8 +23,12 @@ Base = declarative_base()
 DateTime3 = DateTime().with_variant(mysql.DATETIME(fsp=3), "mysql")
 #: ``INT UNSIGNED``
 UInt = Integer().with_variant(mysql.INTEGER(unsigned=True), "mysql")
-#: ``BIGINT UNSIGNED``
-UBigInt = BigInteger().with_variant(mysql.BIGINT(unsigned=True), "mysql")
+#: ``BIGINT UNSIGNED``；SQLite 的自增主键必须是 INTEGER 才能当 rowid 别名
+UBigInt = (
+    BigInteger()
+    .with_variant(mysql.BIGINT(unsigned=True), "mysql")
+    .with_variant(sqlite.INTEGER(), "sqlite")
+)
 
 
 def utcnow() -> datetime:
