@@ -577,7 +577,7 @@ ORDER BY ou.sort_order, u.display_name;
 | 决策运行 | `nis_decision_app` | `nis_decision` 全表 DML | |
 | 执行运行 | `nis_execution_app` | `nis_execution` 全表 DML | |
 | AI 运行 | `nis_ai_app` | `nis_ai` 全表 DML | |
-| 审计运行 | `nis_audit_app` | `nis_audit` 仅 `SELECT`/`INSERT` | **不授予 `UPDATE`/`DELETE`** |
+| 审计运行 | `nis_audit_app` | `nis_audit` 仅 `SELECT`/`INSERT`；**仅 `audit_trace_index` 额外允许 `UPDATE`** | `audit_events` 仍严格只追加，不授予 `UPDATE`/`DELETE` |
 | 迁移 | `nis_<schema>_migrate` | 对应 Schema 的 DDL + DML | 只用于执行迁移，不进运行时容器 |
 
 规则：
@@ -586,7 +586,11 @@ ORDER BY ou.sort_order, u.display_name;
 2. 迁移账号与运行账号分离，Compose 里只给服务注入运行账号；
 3. 账号口令通过环境变量或 Secret 注入，仓库里只有占位值；
 4. 建库、建号与授权脚本由 D 维护（`deploy/mysql/init/`），账号与权限清单由 B 提供；
-5. 验收时用非授权账号直连数据库应被拒绝，作为扩展目标 E1 的证据。
+5. 验收时用非授权账号直连数据库应被拒绝，作为扩展目标 E1 的证据；
+6. `audit_trace_index` 是**派生索引**（按 `request_id` 累加事件数与结果），审计服务需要
+   `UPDATE` 它；`audit_events` 必须保持只追加。授权脚本里对 `nis_audit` 的写法是
+   `GRANT SELECT, INSERT ON nis_audit.*` 加 `GRANT UPDATE ON nis_audit.audit_trace_index`，
+   不允许整库 `UPDATE`。
 
 ## 13. 与接口契约的对应关系
 

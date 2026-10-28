@@ -21,7 +21,7 @@ python scripts/validate_contracts.py
 |---|---|
 | 公共前缀 | `/api/v1`；健康检查在根路径 `/health/*` |
 | 认证 | `Authorization: Bearer <JWT>`；一次登录，会话内不重复认证 |
-| 角色上下文 | `X-Role-Context`（可选），必须属于 Token 中的有效角色 |
+| 角色上下文 | `X-Role-Context`：**多角色用户必填**，单角色可省略；必须是该用户的有效角色，不匹配返回 403 并写安全审计（决策 D-03） |
 | 追踪 | `X-Request-ID` 由 Gateway 生成或透传，全链路一致 |
 | 幂等 | 关键提交使用 `Idempotency-Key`，同键同请求返回原结果 |
 | 分页 | `page`（默认 1）、`page_size`（默认 20，最大 100），响应含 `total` |
