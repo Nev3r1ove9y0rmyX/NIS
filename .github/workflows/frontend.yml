@@ -1,0 +1,52 @@
+name: frontend
+
+# 前端门禁：类型检查、单测、生产构建。
+# 之前 frontend/ 的改动没有任何 CI（backend-tests 只覆盖 services/ 与 tests/），
+# C 的交付只能靠本地自测。这里补上，避免「能跑在我机器上」直接进 develop。
+
+on:
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+  push:
+    branches:
+      - develop
+      - main
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: 类型检查 / 单测 / 构建
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 生产构建
+        run: npm run build
