@@ -169,6 +169,7 @@ class Client:
                        urlparse(base_url).port)
         self.token = ""
         self.username = ""
+        self.role_context: str | None = None
 
     def send(self, method: str, path: str, body: dict[str, Any] | None = None,
              idempotency_key: str | None = None,
@@ -180,6 +181,9 @@ class Client:
         headers = {"Accept": "application/json", "X-Request-ID": str(uuid.uuid4())}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        if self.role_context:
+            # 决策 D-03：多角色用户必须声明本次操作使用的角色。
+            headers["X-Role-Context"] = self.role_context
         if body is not None:
             data = json.dumps(body, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
@@ -205,6 +209,12 @@ class Client:
         payload = self.send("POST", "/auth/login", {"username": username, "password": password})
         self.token = payload["access_token"]
         self.username = username
+        roles = [str(role) for role in payload["user"].get("roles", [])]
+        # 决策 D-03：单角色可省略，多角色必须显式声明；管理账号优先用 administrator。
+        if len(roles) > 1:
+            self.role_context = "administrator" if "administrator" in roles else roles[0]
+        else:
+            self.role_context = None
         return payload["user"]
 
 
