@@ -217,6 +217,10 @@ export const assignmentApi = {
 
   downloadEvidence: (assignmentId: string, evidenceId: string) =>
     requestBlob(`/assignments/${assignmentId}/evidence/${evidenceId}`),
+
+  /** 转交未完成任务：旧分配置为 cancelled，为目标执行员新建 pending 分配。 */
+  transfer: (id: string, body: { expected_version: number; target_executor_id: string; reason?: string }) =>
+    request<Assignment>(`/assignments/${id}/transfer`, { method: 'POST', body }),
 }
 
 // --------------------------------------------------------------------------- AI 建议

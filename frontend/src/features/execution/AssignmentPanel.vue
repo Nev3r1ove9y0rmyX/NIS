@@ -9,13 +9,14 @@
  */
 import { computed, ref, watch } from 'vue'
 import { ApiError } from '../../api/client'
-import { assignmentApi, saveBlob } from '../../api/endpoints'
+import { assignmentApi, candidateApi, saveBlob } from '../../api/endpoints'
 import {
   assignmentStatusNames,
   outcomeNames,
   outcomeOptions,
   priorityNames,
   type Assignment,
+  type Candidate,
   type EvidenceInput,
 } from '../../api/types'
 import AppDialog from '../../components/AppDialog.vue'
@@ -34,10 +35,13 @@ const loading = ref(false)
 const busy = ref(false)
 const error = ref<ApiError | null>(null)
 const errors = ref<FieldErrors>({})
-const mode = ref<'view' | 'complete' | 'reject'>('view')
+const mode = ref<'view' | 'complete' | 'reject' | 'transfer'>('view')
 const resultDraft = ref({ outcome: 'success', summary: '', detail: '' })
 const evidence = ref<EvidenceInput[]>([])
 const rejectReason = ref('')
+const candidates = ref<Candidate[]>([])
+const transferTarget = ref('')
+const transferReason = ref('')
 let completeKey = ''
 
 const status = computed(() => assignment.value?.status ?? 'pending')
@@ -45,6 +49,9 @@ const canAccept = computed(() => status.value === 'pending')
 const canStart = computed(() => status.value === 'accepted')
 const canComplete = computed(() => status.value === 'accepted' || status.value === 'executing')
 const canReject = computed(() => status.value === 'pending' || status.value === 'accepted')
+const canTransfer = computed(() =>
+  status.value === 'pending' || status.value === 'accepted' || status.value === 'executing',
+)
 
 async function load() {
   assignment.value = null
@@ -146,6 +153,43 @@ async function complete() {
   }
 }
 
+async function openTransfer() {
+  mode.value = 'transfer'
+  transferTarget.value = ''
+  transferReason.value = ''
+  candidates.value = []
+  try {
+    const page = await candidateApi.list('executor')
+    // 排除当前持有人（服务端也会拒绝转给自己）
+    candidates.value = page.items.filter(item => item.user_id !== assignment.value?.executor_id)
+  } catch (cause) {
+    const apiError = cause instanceof ApiError ? cause : new ApiError(0, 'NETWORK_ERROR', '读取候选执行员失败。')
+    pushToast(apiError.message, 'error')
+  }
+}
+
+async function submitTransfer() {
+  if (!assignment.value || !transferTarget.value) return
+  busy.value = true
+  error.value = null
+  try {
+    assignment.value = await assignmentApi.transfer(assignment.value.id, {
+      expected_version: assignment.value.version,
+      target_executor_id: transferTarget.value,
+      reason: transferReason.value.trim() || undefined,
+    })
+    mode.value = 'view'
+    pushToast('已转交，接收人待办中会出现该任务', 'success')
+    emit('changed')
+  } catch (cause) {
+    const apiError = cause instanceof ApiError ? cause : new ApiError(0, 'NETWORK_ERROR', '转交失败。')
+    error.value = apiError
+    pushToast(apiError.message, 'error', apiError.conflict)
+  } finally {
+    busy.value = false
+  }
+}
+
 async function downloadEvidence(evidenceId: string, fileName: string) {
   if (!assignment.value) return
   try {
@@ -233,6 +277,27 @@ async function downloadEvidence(evidenceId: string, fileName: string) {
           </div>
           <EvidencePicker v-model="evidence" :disabled="busy" />
           <p class="muted">提交后这条分配进入完成/失败状态，不能重复提交第二份结果。</p>
+        </div>
+      </template>
+
+      <template v-if="mode === 'transfer'">
+        <div class="confirm-panel">
+          <span class="eyebrow">转交任务</span>
+          <div class="form-field">
+            <label for="transfer-target">接收人（在岗执行员）<span aria-hidden="true">*</span></label>
+            <select id="transfer-target" v-model="transferTarget">
+              <option value="">请选择接收人</option>
+              <option v-for="item in candidates" :key="item.user_id" :value="item.user_id">
+                {{ item.display_name }}（{{ item.role_code }}）
+              </option>
+            </select>
+            <small class="muted" v-if="!candidates.length">暂无可选执行员</small>
+          </div>
+          <div class="form-field">
+            <label for="transfer-reason">转交说明</label>
+            <input id="transfer-reason" v-model="transferReason" maxlength="500" placeholder="例如：本人临时外出，交给同组执行员" />
+          </div>
+          <p class="muted">转交后原用户不再持有该任务，接收人待办中出现同一任务，内容不变。</p>
         </div>
       </template>
 

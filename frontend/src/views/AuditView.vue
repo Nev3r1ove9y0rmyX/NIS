@@ -5,7 +5,7 @@
  * 演示时最有说服力的一步：用一次提交的 `X-Request-ID` 还原跨服务调用链，
  * 看到 execution → decision → recon 各服务在同一 request_id 下的动作与结果。
  */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ApiError } from '../api/client'
 import { auditApi } from '../api/endpoints'
 import {
@@ -17,10 +17,15 @@ import {
 } from '../api/types'
 import AppShell from '../components/AppShell.vue'
 import DataState from '../components/DataState.vue'
+import AdminPanel from '../features/admin/AdminPanel.vue'
+import { can } from '../stores/session'
 import { usePagedList } from '../composables/usePagedList'
 import { formatFull, shortId, truncate } from '../utils/format'
 
 const meta = workspaceMeta.audit
+/** 同一工作台内切换：审计日志 / 系统管理（后者需要 iam:manage）。 */
+const view = ref<'audit' | 'admin'>('audit')
+const canManage = computed(() => can('iam:manage'))
 const resultFilter = ref('')
 const traceInput = ref('')
 const trace = ref<AuditTrace | null>(null)
@@ -69,6 +74,20 @@ onMounted(refresh)
       </div>
       <button class="new-button" @click="refresh">↻ {{ meta.action }}</button>
     </section>
+
+    <div class="view-switch" role="tablist" aria-label="工作台视图">
+      <button :class="{ active: view === 'audit' }" role="tab" @click="view = 'audit'">审计日志</button>
+      <button
+        v-if="canManage"
+        :class="{ active: view === 'admin' }"
+        role="tab"
+        @click="view = 'admin'"
+      >
+        系统管理
+      </button>
+    </div>
+
+    <template v-if="view === 'audit'">
 
     <section class="trace-panel">
       <div class="trace-form">
@@ -187,5 +206,7 @@ onMounted(refresh)
       <p>{{ meta.nextStep }}</p>
       <span class="next-arrow">→</span>
     </section>
+    </template>
+    <AdminPanel v-else-if="canManage" />
   </AppShell>
 </template>
