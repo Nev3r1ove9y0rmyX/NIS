@@ -97,7 +97,8 @@ def list_organizations(request: Request) -> JSONResponse:
 @router.get("/candidates", summary="候选接收人")
 def list_candidates(
     request: Request,
-    target_role: str = Query(min_length=1, max_length=32),
+    # 候选接收人只用于"向下指派"，限定三个业务角色，避免枚举管理/侦察等无关账号
+    target_role: str = Query(pattern="^(analyst|decision_maker|executor)$"),
     source_record_id: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
