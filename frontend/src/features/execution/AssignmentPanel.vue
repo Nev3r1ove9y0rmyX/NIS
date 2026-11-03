@@ -27,7 +27,12 @@ import { formatBytes, formatFull } from '../../utils/format'
 import { newIdempotencyKey } from '../../utils/idempotency'
 import { hasErrors, validateResult, type FieldErrors } from '../../utils/validation'
 
-const props = defineProps<{ open: boolean; assignmentId: string | null }>()
+const props = defineProps<{
+  open: boolean
+  assignmentId: string | null
+  /** 打开方式：直接进入"转交"表单（列表行的快捷入口用） */
+  initialMode?: 'view' | 'transfer'
+}>()
 const emit = defineEmits<{ close: []; changed: [] }>()
 
 const assignment = ref<Assignment | null>(null)
@@ -66,6 +71,11 @@ async function load() {
   loading.value = true
   try {
     assignment.value = await assignmentApi.get(props.assignmentId)
+    // 从列表行点"转交"进来时，直接打开转交表单（状态不允许则停留在查看态）
+    if (props.initialMode === 'transfer' && assignment.value &&
+        ['pending', 'accepted', 'executing'].includes(assignment.value.status)) {
+      await openTransfer()
+    }
   } catch (cause) {
     error.value = cause instanceof ApiError ? cause : new ApiError(0, 'NETWORK_ERROR', '执行任务加载失败。')
   } finally {

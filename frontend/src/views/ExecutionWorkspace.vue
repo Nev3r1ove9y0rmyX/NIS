@@ -30,6 +30,8 @@ const { state, load, goto, pages, reset } = usePagedList<Assignment>(query =>
 
 const panelOpen = ref(false)
 const activeId = ref<string | null>(null)
+/** 打开方式：默认查看；从行内「转交」进入时直接打开转交表单 */
+const panelMode = ref<'view' | 'transfer'>('view')
 
 async function loadCounts() {
   try {
@@ -54,9 +56,15 @@ async function refresh() {
   await Promise.all([load(state.page, { silent: true }), loadCounts()])
 }
 
-function open(id: string) {
+function open(id: string, mode: 'view' | 'transfer' = 'view') {
   activeId.value = id
+  panelMode.value = mode
   panelOpen.value = true
+}
+
+/** 待接收/已接收/执行中才可转交 */
+function canTransfer(status: string): boolean {
+  return status === 'pending' || status === 'accepted' || status === 'executing'
 }
 
 watch(statusFilter, async () => {
@@ -146,6 +154,14 @@ onMounted(refresh)
                   <button class="table-action" @click="open(item.id)">
                     {{ item.status === 'pending' ? '接收 / 拒绝 ↗' : '查看 / 反馈 ↗' }}
                   </button>
+                  <button
+                    v-if="canTransfer(item.status)"
+                    class="table-action"
+                    title="转交给其他执行员"
+                    @click="open(item.id, 'transfer')"
+                  >
+                    转交 ↗
+                  </button>
                 </td>
               </tr>
             </tbody>
@@ -169,6 +185,12 @@ onMounted(refresh)
       <span class="next-arrow">→</span>
     </section>
 
-    <AssignmentPanel :open="panelOpen" :assignment-id="activeId" @close="panelOpen = false" @changed="refresh" />
+    <AssignmentPanel
+      :open="panelOpen"
+      :assignment-id="activeId"
+      :initial-mode="panelMode"
+      @close="panelOpen = false"
+      @changed="refresh"
+    />
   </AppShell>
 </template>
