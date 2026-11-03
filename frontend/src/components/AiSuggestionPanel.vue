@@ -20,8 +20,10 @@ const props = withDefaults(
     suggestionType: string
     suggestion: AISuggestion | null
     disabled?: boolean
+    /** 未保存时自动保存并返回对象 ID（传了就支持"直接分析"） */
+    ensureObjectId?: () => Promise<string | null>
   }>(),
-  { disabled: false },
+  { disabled: false, ensureObjectId: undefined },
 )
 const emit = defineEmits<{
   'update:suggestion': [value: AISuggestion]
@@ -46,14 +48,23 @@ const pending = computed(() => props.suggestion?.status === 'pending')
 const editedView = computed(() => (props.suggestion?.edited_content ?? {}) as Record<string, unknown>)
 
 async function requestSuggestion() {
-  if (requesting.value || !props.objectId) return
+  if (requesting.value || props.disabled) return
   requesting.value = true
   error.value = ''
   try {
+    // 没有对象 ID 时先自动保存草稿（表单校验不过会返回 null）
+    let objectId = props.objectId
+    if (!objectId && props.ensureObjectId) {
+      objectId = (await props.ensureObjectId()) || ''
+    }
+    if (!objectId) {
+      error.value = '请先补齐必填项，再请求 AI 建议。'
+      return
+    }
     const suggestion = await aiApi.create({
       stage: props.stage,
       business_object_type: props.objectType,
-      business_object_id: props.objectId,
+      business_object_id: objectId,
       suggestion_type: props.suggestionType,
     })
     emit('update:suggestion', suggestion)
@@ -115,17 +126,20 @@ async function decide(decision: 'accepted' | 'edited' | 'rejected') {
     <header>
       <div>
         <strong>AI 建议 · 待人工确认</strong>
-        <small>规则模板生成，仅供参考；未经你确认不会写入业务字段。</small>
+        <small>由系统配置的 AI 模型生成（不可用时回退规则模板），仅供参考；未经你确认不会写入业务字段。</small>
       </div>
       <span class="status-badge" data-tone="waiting">{{ suggestion ? aiStatusNames[suggestion.status] : '未请求' }}</span>
     </header>
 
     <div v-if="!suggestion" class="ai-empty">
       <p class="muted">可以请求一次 AI 摘要作为起草参考，也可以直接人工填写。</p>
-      <button type="button" :disabled="requesting || disabled || !objectId" @click="requestSuggestion">
+      <button type="button" :disabled="requesting || disabled || (!objectId && !ensureObjectId)" @click="requestSuggestion">
         {{ requesting ? '正在请求建议…' : '请求 AI 建议' }}
       </button>
-      <p v-if="!objectId" class="muted">先保存草稿，拿到记录 ID 后才能请求建议。</p>
+      <p v-if="!objectId && ensureObjectId" class="muted">
+        不需要先保存：点按钮会自动保存草稿，再基于这份内容请 AI 分析。
+      </p>
+      <p v-else-if="!objectId" class="muted">先保存草稿，拿到记录 ID 后才能请求建议。</p>
     </div>
 
     <template v-else>

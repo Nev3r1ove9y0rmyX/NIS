@@ -204,6 +204,11 @@ async function submitReport() {
     submitting.value = false
   }
 }
+/** 未保存草稿时：先自动保存，再让 AI 基于该草稿生成建议。 */
+async function ensureForAi(): Promise<string | null> {
+  await saveDraft()
+  return report.value?.id ?? null
+}
 </script>
 
 <template>
@@ -293,8 +298,9 @@ async function submitReport() {
           stage="analysis"
           object-type="analysis_report"
           :object-id="report?.id ?? ''"
+          :ensure-object-id="ensureForAi"
           suggestion-type="entity_relation"
-          :disabled="!report"
+          :disabled="saving || submitting"
         />
       </template>
 
