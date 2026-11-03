@@ -59,3 +59,10 @@ class OrganizationCreateRequest(BaseModel):
 class ResolveUsersRequest(BaseModel):
     user_ids: list[str]
     required_role: str = Field(min_length=1, max_length=32)
+
+
+class DeviceBindingRequest(BaseModel):
+    """账号设备绑定；两个列表都为空表示解除绑定。"""
+
+    allowed_ips: list[str] = Field(default_factory=list, max_length=20)
+    allowed_macs: list[str] = Field(default_factory=list, max_length=20)

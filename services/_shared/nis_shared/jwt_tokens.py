@@ -30,6 +30,8 @@ class TokenPayload:
     organization_id: str | None
     jti: str
     token_type: str
+    #: 令牌签发时间（epoch 秒），用于强制下线的吊销判断。
+    issued_at: float | None = None
 
     @property
     def is_access(self) -> bool:
@@ -156,4 +158,5 @@ def decode_token(
         organization_id=claims.get("org"),
         jti=str(claims.get("jti", "")),
         token_type=str(claims["typ"]),
+        issued_at=float(claims["iat"]) if claims.get("iat") is not None else None,
     )

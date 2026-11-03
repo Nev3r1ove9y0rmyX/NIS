@@ -18,6 +18,8 @@ from app.models import (
     Role,
     RolePermission,
     User,
+    UserDeviceBinding,
+    UserSession,
     UserRole,
 )
 from nis_shared.enums import RoleCode
@@ -128,7 +130,7 @@ def user_view(db: Session, user: User, *, with_permissions: bool = True) -> dict
 
 
 def _token_pair(
-    signing_key: SigningKey, user: User, roles: tuple[str, ...]
+    signing_key: SigningKey, user: User, roles: tuple[str, ...], *, access_jti: str
 ) -> dict[str, object]:
     access_minutes = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
     refresh_days = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
@@ -139,7 +141,7 @@ def _token_pair(
         organization_id=user.organization_id,
         token_type=ACCESS_TOKEN_TYPE,
         expires_minutes=access_minutes,
-        jti=str(uuid.uuid4()),
+        jti=access_jti,
     )
     refresh = create_token(
         signing_key=signing_key,
@@ -158,7 +160,15 @@ def _token_pair(
     }
 
 
-def login(db: Session, signing_key: SigningKey, username: str, password: str) -> dict[str, object]:
+def login(
+    db: Session,
+    signing_key: SigningKey,
+    username: str,
+    password: str,
+    *,
+    client_ip: str | None = None,
+    device_mac: str | None = None,
+) -> dict[str, object]:
     user = get_user_by_username(db, username)
     now = _now()
 
@@ -189,13 +199,18 @@ def login(db: Session, signing_key: SigningKey, username: str, password: str) ->
         db.commit()
         raise ApiError("UNAUTHENTICATED", "用户名或密码错误")
 
+    ensure_device_allowed(db, user, client_ip=client_ip, device_mac=device_mac)
+
     # 成功：清理失败计数与过期锁定
     user.failed_login_count = 0
     user.locked_until = None
     user.last_login_at = now
     roles = roles_of(db, user.id)
     db.commit()
-    return {"user": user_view(db, user), "token": _token_pair(signing_key, user, roles)}
+    session_id = str(uuid.uuid4())
+    token_pair = _token_pair(signing_key, user, roles, access_jti=session_id)
+    create_session(db, user.id, session_id, client_ip=client_ip)
+    return {"user": user_view(db, user), "token": token_pair}
 
 
 def refresh(db: Session, signing_key: SigningKey, refresh_token: str) -> dict[str, object]:
@@ -208,7 +223,10 @@ def refresh(db: Session, signing_key: SigningKey, refresh_token: str) -> dict[st
     if user is None or not user.is_active:
         raise ApiError("UNAUTHENTICATED", "账号不存在或已停用")
     roles = roles_of(db, user.id)
-    return _token_pair(signing_key, user, roles)
+    session_id = str(uuid.uuid4())
+    pair = _token_pair(signing_key, user, roles, access_jti=session_id)
+    create_session(db, user.id, session_id)
+    return pair
 
 
 def session_view(
@@ -645,3 +663,180 @@ def resolve_users(db: Session, *, user_ids: list[str], required_role: str) -> li
 #: 供路由层校验角色代码是否属于标准角色
 STANDARD_ROLES = {str(role) for role in RoleCode}
 
+
+
+# --------------------------------------------------------------------------- 设备绑定
+
+
+def _split(value: str | None) -> list[str]:
+    return [item.strip() for item in (value or "").split(",") if item.strip()]
+
+
+def device_binding_view(db: Session, user_id: str) -> dict[str, object]:
+    item = db.scalar(select(UserDeviceBinding).where(UserDeviceBinding.user_id == user_id))
+    if item is None:
+        return {"user_id": user_id, "allowed_ips": [], "allowed_macs": [], "enforced": False}
+    return {
+        "user_id": user_id,
+        "allowed_ips": _split(item.allowed_ips),
+        "allowed_macs": _split(item.allowed_macs),
+        "enforced": bool(_split(item.allowed_ips) or _split(item.allowed_macs)),
+    }
+
+
+def set_device_binding(
+    db: Session,
+    user_id: str,
+    *,
+    allowed_ips: list[str],
+    allowed_macs: list[str],
+    actor_id: str,
+) -> dict[str, object]:
+    user = db.get(User, user_id)
+    if user is None:
+        raise ApiError("RESOURCE_NOT_FOUND", "用户不存在", details={"user_id": user_id})
+
+    import re
+
+    ip_pattern = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+    mac_pattern = re.compile(r"^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$")
+    for value in allowed_ips:
+        if not ip_pattern.match(value):
+            raise ApiError("INVALID_REQUEST", "IP 地址格式不正确",
+                           details={"field": "allowed_ips", "value": value}, status_code=400)
+    for value in allowed_macs:
+        if not mac_pattern.match(value):
+            raise ApiError("INVALID_REQUEST", "MAC 地址格式不正确",
+                           details={"field": "allowed_macs", "value": value}, status_code=400)
+
+    normalized_macs = [value.replace("-", ":").lower() for value in allowed_macs]
+    item = db.scalar(select(UserDeviceBinding).where(UserDeviceBinding.user_id == user_id))
+    if item is None:
+        item = UserDeviceBinding(user_id=user_id, created_by=actor_id, updated_by=actor_id)
+        db.add(item)
+    item.allowed_ips = ",".join(allowed_ips)
+    item.allowed_macs = ",".join(normalized_macs)
+    item.updated_by = actor_id
+    item.version = int(item.version or 1) + 1
+    db.commit()
+    return device_binding_view(db, user_id)
+
+
+def ensure_device_allowed(
+    db: Session, user: User, *, client_ip: str | None, device_mac: str | None
+) -> None:
+    binding = db.scalar(select(UserDeviceBinding).where(UserDeviceBinding.user_id == user.id))
+    if binding is None:
+        return
+    ips = _split(binding.allowed_ips)
+    macs = [value.replace("-", ":").lower() for value in _split(binding.allowed_macs)]
+    if ips and (client_ip or "") not in ips:
+        raise ApiError(
+            "FORBIDDEN",
+            "该账号已绑定终端，当前设备不允许登录",
+            details={"reason": "device_mismatch", "bound": "ip"},
+            status_code=403,
+        )
+    if macs and (device_mac or "").replace("-", ":").lower() not in macs:
+        raise ApiError(
+            "FORBIDDEN",
+            "该账号已绑定终端，当前设备不允许登录",
+            details={"reason": "device_mismatch", "bound": "mac"},
+            status_code=403,
+        )
+
+# --------------------------------------------------------------------------- 在线状态与强制下线
+
+ONLINE_WINDOW_MINUTES = 5
+SESSION_TOUCH_SECONDS = 30
+
+
+def create_session(db: Session, user_id: str, session_id: str, *, client_ip: str | None = None) -> None:
+    now = _now()
+    db.add(
+        UserSession(
+            id=session_id,
+            user_id=user_id,
+            last_seen_at=now,
+            last_ip=client_ip,
+            created_by=user_id,
+            updated_by=user_id,
+        )
+    )
+    db.commit()
+
+
+def require_active_session(db: Session, session_id: str | None) -> UserSession:
+    """令牌对应会话必须存在且未被吊销，否则视为已下线。"""
+
+    if not session_id:
+        raise ApiError("UNAUTHENTICATED", "令牌缺少会话标识")
+    item = db.get(UserSession, session_id)
+    if item is None:
+        raise ApiError("UNAUTHENTICATED", "会话不存在或已失效")
+    if item.revoked_at is not None:
+        raise ApiError("UNAUTHENTICATED", "该账号已被强制下线，请重新登录")
+    return item
+
+
+def touch_session(db: Session, item: UserSession, *, client_ip: str | None = None) -> None:
+    now = _now()
+    if item.last_seen_at is not None and (now - item.last_seen_at).total_seconds() < SESSION_TOUCH_SECONDS:
+        return
+    item.last_seen_at = now
+    item.last_ip = client_ip or item.last_ip
+    item.updated_by = item.user_id
+    db.commit()
+
+
+def online_view(db: Session, window_minutes: int = ONLINE_WINDOW_MINUTES) -> dict[str, object]:
+    cutoff = _now() - timedelta(minutes=window_minutes)
+    rows = db.execute(
+        select(UserSession, User.username, User.display_name)
+        .join(User, User.id == UserSession.user_id)
+        .where(
+            UserSession.revoked_at.is_(None),
+            UserSession.last_seen_at.is_not(None),
+            UserSession.last_seen_at >= cutoff,
+        )
+        .order_by(UserSession.last_seen_at.desc())
+    ).all()
+    seen: dict[str, dict[str, object]] = {}
+    for session, username, display_name in rows:
+        if session.user_id in seen:
+            seen[session.user_id]["sessions"] = int(seen[session.user_id]["sessions"]) + 1
+            continue
+        seen[session.user_id] = {
+            "user_id": session.user_id,
+            "username": username,
+            "display_name": display_name,
+            "online": True,
+            "last_seen_at": iso(session.last_seen_at),
+            "last_ip": session.last_ip,
+            "sessions": 1,
+        }
+    items = list(seen.values())
+    return {"items": items, "total": len(items), "window_minutes": window_minutes}
+
+
+def force_logout(db: Session, user_id: str, *, actor_id: str) -> dict[str, object]:
+    user = db.get(User, user_id)
+    if user is None:
+        raise ApiError("RESOURCE_NOT_FOUND", "用户不存在", details={"user_id": user_id})
+    now = _now()
+    sessions = db.scalars(
+        select(UserSession).where(
+            UserSession.user_id == user_id, UserSession.revoked_at.is_(None)
+        )
+    ).all()
+    for item in sessions:
+        item.revoked_at = now
+        item.revoked_by = actor_id
+        item.updated_by = actor_id
+    db.commit()
+    return {
+        "user_id": user_id,
+        "username": user.username,
+        "revoked_sessions": len(sessions),
+        "revoked_at": iso(now),
+    }

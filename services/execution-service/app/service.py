@@ -109,7 +109,10 @@ def list_assignments(
         stmt = stmt.where(ExecutionAssignment.status == status)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(
-        stmt.order_by(ExecutionAssignment.updated_at.desc())
+        stmt.order_by(
+            (ExecutionAssignment.priority == "urgent").desc(),
+            ExecutionAssignment.updated_at.desc(),
+        )
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
@@ -301,6 +304,75 @@ def complete(
     db.refresh(item)
     return item
 
+
+TRANSFERABLE = {PENDING, ACCEPTED, EXECUTING}
+
+
+def transfer(
+    db: Session,
+    item: ExecutionAssignment,
+    *,
+    actor_id: str,
+    target_executor_id: str,
+    reason: str | None,
+    expected_version: int,
+) -> tuple[ExecutionAssignment, ExecutionAssignment]:
+    """转交未完成的个人分配：旧分配置为 cancelled，为目标执行员新建一条 pending 分配。
+
+    分配事实在 Execution 侧；Decision 侧只保存摘要，由调用方回写两次（旧行终态、新行 pending）。
+    """
+
+    _ensure_version(item, expected_version)
+    if item.status not in TRANSFERABLE:
+        raise ApiError(
+            "WORKFLOW_CONFLICT",
+            "当前状态的任务不可转交",
+            details={"status": item.status},
+            status_code=409,
+        )
+    target = (target_executor_id or "").strip()
+    if not target or target == item.executor_id:
+        raise ApiError(
+            "INVALID_REQUEST",
+            "转交目标必须是其他执行员",
+            details={"field": "target_executor_id"},
+            status_code=400,
+        )
+    duplicate = db.scalar(
+        select(ExecutionAssignment).where(
+            ExecutionAssignment.command_id == item.command_id,
+            ExecutionAssignment.executor_id == target,
+        )
+    )
+    if duplicate is not None:
+        raise ApiError(
+            "INVALID_REQUEST",
+            "该执行员已持有同一指令的分配",
+            details={"target_executor_id": target},
+            status_code=400,
+        )
+
+    item.status = CANCELLED
+    item.reject_reason = (f"转交给 {target}" if not reason else f"转交给 {target}：{reason}")[:500]
+    item.updated_by = actor_id
+    item.version = int(item.version) + 1
+
+    created = ExecutionAssignment(
+        command_id=item.command_id,
+        command_title_snapshot=item.command_title_snapshot,
+        command_content_snapshot=item.command_content_snapshot,
+        priority=item.priority,
+        deadline=item.deadline,
+        executor_id=target,
+        status=PENDING,
+        created_by=actor_id,
+        updated_by=actor_id,
+    )
+    db.add(created)
+    db.commit()
+    db.refresh(item)
+    db.refresh(created)
+    return item, created
 
 def summary_items(db: Session, command_id: str) -> list[dict[str, object]]:
     rows = db.scalars(

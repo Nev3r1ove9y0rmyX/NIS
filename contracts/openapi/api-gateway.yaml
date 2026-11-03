@@ -449,6 +449,110 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /admin/users/{user_id}/device-binding:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [管理]
+      operationId: getUserDeviceBinding
+      summary: 查看账号设备绑定
+      description: 需要 iam:manage。
+      responses:
+        '200':
+          description: 绑定信息
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user_id, allowed_ips, allowed_macs, enforced]
+                properties:
+                  user_id:
+                    $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                  allowed_ips:
+                    type: array
+                    items:
+                      type: string
+                  allowed_macs:
+                    type: array
+                    items:
+                      type: string
+                  enforced:
+                    type: boolean
+    put:
+      tags: [管理]
+      operationId: replaceUserDeviceBinding
+      summary: 设置账号设备绑定
+      description: 需要 iam:manage。两个列表都为空表示解除绑定；只允许列表内的终端登录。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                allowed_ips:
+                  type: array
+                  items:
+                    type: string
+                allowed_macs:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: 绑定结果
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /admin/online-users:
+    get:
+      tags: [管理]
+      operationId: listOnlineUsers
+      summary: 在线用户列表
+      description: 需要 iam:manage。返回最近 5 分钟内有活动的用户。
+      responses:
+        '200':
+          description: 在线用户
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                  total:
+                    type: integer
+                  window_minutes:
+                    type: integer
+
+  /admin/users/{user_id}/force-logout:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [管理]
+      operationId: forceLogoutUser
+      summary: 强制下线
+      description: 需要 iam:manage。吊销该账号当前全部会话，旧令牌立即失效。
+      responses:
+        '200':
+          description: 吊销结果
+          content:
+            application/json:
+              schema:
+                type: object
   /admin/roles:
     get:
       tags: [管理]
@@ -1353,6 +1457,44 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+
+  /assignments/{assignment_id}/transfer:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [执行]
+      operationId: transferAssignment
+      summary: 转交执行任务
+      description: |
+        需要 execution:respond。把本人未完成的分配转交给其他执行员：旧分配置为 cancelled，
+        为目标执行员新建一条 pending 分配，并同步决策侧摘要；已完成或已结束的任务不可转交。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, target_executor_id]
+              properties:
+                expected_version:
+                  type: integer
+                  minimum: 1
+                target_executor_id:
+                  $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                reason:
+                  type: string
+                  maxLength: 500
+      responses:
+        '200':
+          description: 转交成功，返回新分配
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Assignment'
 
   /assignments/{assignment_id}/complete:
     parameters:

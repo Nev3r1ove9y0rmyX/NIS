@@ -228,6 +228,73 @@ paths:
         '422':
           $ref: '#/components/responses/ValidationError'
 
+  /internal/v1/users/{user_id}/device-binding:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    get:
+      tags: [用户]
+      operationId: getUserDeviceBindingInternal
+      summary: 查看账号设备绑定（内部）
+      responses:
+        '200':
+          description: 绑定信息
+          content:
+            application/json:
+              schema:
+                type: object
+    put:
+      tags: [用户]
+      operationId: replaceUserDeviceBindingInternal
+      summary: 设置账号设备绑定（内部）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 绑定结果
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /internal/v1/admin/users/online:
+    get:
+      tags: [用户]
+      operationId: listOnlineUsersInternal
+      summary: 在线用户列表（内部）
+      responses:
+        '200':
+          description: 在线用户
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /internal/v1/admin/users/{user_id}/force-logout:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [用户]
+      operationId: forceLogoutUserInternal
+      summary: 强制下线（内部）
+      responses:
+        '200':
+          description: 吊销结果
+          content:
+            application/json:
+              schema:
+                type: object
   /internal/v1/users/{user_id}/roles:
     parameters:
       - name: user_id

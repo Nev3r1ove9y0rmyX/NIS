@@ -174,7 +174,10 @@ def list_records(
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(
-        stmt.order_by(ReconRecord.updated_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        stmt.order_by(
+            (ReconRecord.priority == "urgent").desc(),
+            ReconRecord.updated_at.desc(),
+        ).offset((page - 1) * page_size).limit(page_size)
     ).all()
     return {
         "items": [record_view(item) for item in rows],

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from app.payloads import (
     AssignRoleRequest,
@@ -194,4 +195,43 @@ def create_organization(payload: CreateOrganizationRequest, request: Request) ->
             "is_active": org.get("is_active"),
         },
         status_code=code,
+    )
+
+
+class DeviceBindingRequest(BaseModel):
+    allowed_ips: list[str] = Field(default_factory=list, max_length=20)
+    allowed_macs: list[str] = Field(default_factory=list, max_length=20)
+
+
+@router.get("/users/{user_id}/device-binding", summary="查看账号设备绑定")
+def get_device_binding(user_id: str, request: Request) -> JSONResponse:
+    return forward_response(
+        request, "GET", f"/internal/v1/users/{user_id}/device-binding",
+        permission="iam:manage", upstream="iam",
+    )
+
+
+@router.put("/users/{user_id}/device-binding", summary="设置账号设备绑定")
+def put_device_binding(
+    user_id: str, payload: DeviceBindingRequest, request: Request
+) -> JSONResponse:
+    return forward_response(
+        request, "PUT", f"/internal/v1/users/{user_id}/device-binding",
+        permission="iam:manage", upstream="iam", json_body=payload.model_dump(),
+    )
+
+
+@router.get("/online-users", summary="在线用户列表")
+def list_online_users(request: Request) -> JSONResponse:
+    return forward_response(
+        request, "GET", "/internal/v1/admin/users/online",
+        permission="iam:manage", upstream="iam",
+    )
+
+
+@router.post("/users/{user_id}/force-logout", summary="强制下线")
+def force_logout_user(user_id: str, request: Request) -> JSONResponse:
+    return forward_response(
+        request, "POST", f"/internal/v1/admin/users/{user_id}/force-logout",
+        permission="iam:manage", upstream="iam",
     )

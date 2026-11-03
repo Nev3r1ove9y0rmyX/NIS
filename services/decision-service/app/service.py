@@ -191,7 +191,10 @@ def list_commands(
         stmt = stmt.where(Command.status == status)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(
-        stmt.order_by(Command.updated_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        stmt.order_by(
+            (Command.priority == "urgent").desc(),
+            Command.updated_at.desc(),
+        ).offset((page - 1) * page_size).limit(page_size)
     ).all()
     return {
         "items": [command_view(item) for item in rows],
@@ -466,7 +469,30 @@ def apply_assignment_state(
         (item for item in command.assignments if item.assignment_id == assignment_id), None
     )
     if target is None:
-        raise ApiError("RESOURCE_NOT_FOUND", "该指令下没有这个分配", details={"assignment_id": assignment_id})
+        # 任务转交会在执行侧新建一条分配，决策侧需要接住这条新分配的首次回写。
+        if status != AssignmentStatus.PENDING.value:
+            raise ApiError(
+                "RESOURCE_NOT_FOUND",
+                "该指令下没有这个分配",
+                details={"assignment_id": assignment_id},
+            )
+        created = CommandAssignment(
+            command_id=command.id,
+            assignment_id=assignment_id,
+            executor_id=executor_id,
+            status=status,
+            created_by="system",
+            updated_by="system",
+        )
+        db.add(created)
+        db.commit()
+        db.refresh(command)
+        command.status = recompute_status(command.assignments)
+        command.updated_at = _now()
+        command.version = int(command.version) + 1
+        db.commit()
+        db.refresh(command)
+        return command
     if target.executor_id != executor_id:
         raise ApiError("INVALID_REQUEST", "分配与执行员不匹配")
     if target.status == status:

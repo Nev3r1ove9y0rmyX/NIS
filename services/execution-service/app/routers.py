@@ -11,6 +11,7 @@ from app.payloads import (
     AssignmentCreateBatch,
     CompleteRequest,
     RejectRequest,
+    TransferRequest,
     TransitionRequest,
 )
 from nis_shared.auth import Principal, get_principal, require_permission
@@ -265,6 +266,49 @@ def complete(
         details={"outcome": payload.outcome, "evidence": len(payload.evidence)},
     )
     return service.assignment_view(updated)
+
+
+@router.post("/internal/v1/assignments/{assignment_id}/transfer", summary="转交执行任务")
+def transfer(
+    assignment_id: str,
+    payload: TransferRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_permission("execution:respond")),
+) -> dict:
+    item = service.get_assignment(db, assignment_id)
+    service.ensure_owner(item, principal.user_id)
+    try:
+        updated, created = service.transfer(
+            db,
+            item,
+            actor_id=principal.user_id,
+            target_executor_id=payload.target_executor_id,
+            reason=payload.reason,
+            expected_version=payload.expected_version,
+        )
+    except ApiError as exc:
+        _audit(
+            request,
+            "execution_assignment.transfer",
+            "denied",
+            principal=principal,
+            resource_id=assignment_id,
+            error_code=exc.code,
+        )
+        raise
+    # 旧分配变为 cancelled、新分配为 pending，两侧都要回写，决策侧据此重算总体状态。
+    _write_back(request, updated, principal)
+    _write_back(request, created, principal)
+    _audit(
+        request,
+        "execution_assignment.transfer",
+        "success",
+        principal=principal,
+        resource_id=assignment_id,
+        details={"target_executor_id": created.executor_id, "new_assignment_id": created.id},
+    )
+    return service.assignment_view(created)
 
 
 @router.get("/internal/v1/commands/{command_id}/summary", summary="指令执行情况汇总")
