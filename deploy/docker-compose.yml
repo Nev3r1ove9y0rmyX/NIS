@@ -333,6 +333,8 @@ services:
       AI_MODEL: ${AI_MODEL:-qwen2.5:7b}
       AI_API_KEY: ${AI_API_KEY:-}
       IAM_SERVICE_URL: http://iam-service:8001
+      RECON_SERVICE_URL: http://recon-service:8002
+      ANALYSIS_SERVICE_URL: http://analysis-service:8003
       AUDIT_SERVICE_URL: http://audit-service:8007
       AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-15}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}

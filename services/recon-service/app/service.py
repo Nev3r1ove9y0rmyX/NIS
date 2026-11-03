@@ -441,6 +441,20 @@ def authorized_view(
             "scope": "summary_only",
             "record": summary_view(record),
         }
+    if purpose == "ai":
+        # AI 建议只在"本人可读"的范围内取内容：作者本人或被指派的分析员
+        allowed = requester_id in {
+            getattr(record, "author_id", None),
+            getattr(record, "created_by", None),
+        } or is_assigned(record, requester_id)
+        if not allowed:
+            raise ApiError("FORBIDDEN", "只有记录作者或被指派的分析员可以让 AI 读取全文")
+        return {
+            "record_id": record.id,
+            "granted": True,
+            "scope": "full",
+            "record": record_view(record),
+        }
     raise ApiError("INVALID_REQUEST", "未知的读取用途", details={"purpose": purpose})
 
 

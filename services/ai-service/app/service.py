@@ -101,10 +101,15 @@ PROMPTS: dict[tuple[str, str], str] = {
 }
 
 
-def _prompt(stage: str, suggestion_type: str) -> str:
+def _prompt(stage: str, suggestion_type: str, context: str = "") -> str:
     base = PROMPTS.get((stage, suggestion_type), "你是协同调度系统的辅助助手。")
+    material = (
+        f"\n以下是本条业务对象的真实内容，只能基于它归纳，不要编造时间、地点、人员：\n{context}\n"
+        if context.strip()
+        else ""
+    )
     return (
-        f"{base}\n"
+        f"{base}{material}\n"
         "要求：只输出 JSON，字段为 headline（一句话结论）、items（字符串数组，2-4 条）、"
         'caveat（一句话提醒，说明最终由人工确认）。不要输出 JSON 以外的任何文字。'
     )
@@ -134,12 +139,12 @@ def _extract_json(text: str) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-def _call_model(stage: str, suggestion_type: str) -> dict[str, object] | None:
+def _call_model(stage: str, suggestion_type: str, context: str = "") -> dict[str, object] | None:
     """调用真实模型；任何异常都返回 None，由调用方回退模板。"""
 
     if PROVIDER not in {"ollama", "openai"} or not AI_BASE_URL or not AI_MODEL:
         return None
-    prompt = _prompt(stage, suggestion_type)
+    prompt = _prompt(stage, suggestion_type, context)
     try:
         if PROVIDER == "ollama":
             payload = {
@@ -182,11 +187,11 @@ def _call_model(stage: str, suggestion_type: str) -> dict[str, object] | None:
     }
 
 
-def generate(stage: str, suggestion_type: str) -> dict[str, object]:
+def generate(stage: str, suggestion_type: str, *, context: str = "") -> dict[str, object]:
     if not enabled():
         raise ApiError("SERVICE_UNAVAILABLE", "AI 建议服务当前不可用，请人工完成该环节")
 
-    generated = _call_model(stage, suggestion_type)
+    generated = _call_model(stage, suggestion_type, context)
     if generated is not None:
         return generated
 
@@ -232,8 +237,9 @@ def create_suggestion(
     business_object_id: str,
     suggestion_type: str,
     requested_by: str,
+    context: str = "",
 ) -> tuple[AIRequest, AISuggestion]:
-    generated = generate(stage, suggestion_type)
+    generated = generate(stage, suggestion_type, context=context)
     request = AIRequest(
         stage=stage,
         business_object_type=business_object_type,

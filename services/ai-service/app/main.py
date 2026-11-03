@@ -18,4 +18,4 @@ settings = load_settings("ai-service")
 database = Database(settings.db_url)
 
 app = create_service_app(settings, database=database, routers=[ai_router])
-wire_clients(app, settings, with_iam=True)
+wire_clients(app, settings, with_iam=True, with_recon=True, with_analysis=True)

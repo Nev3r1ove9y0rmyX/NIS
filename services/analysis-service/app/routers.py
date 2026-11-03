@@ -360,7 +360,7 @@ def update_decision_state(
 def authorized_view(
     report_id: str,
     requester_user_id: str = Query(min_length=36, max_length=36),
-    purpose: str = Query(pattern="^(decision|audit)$"),
+    purpose: str = Query(pattern="^(decision|audit|ai)$"),
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_principal),
 ) -> dict:

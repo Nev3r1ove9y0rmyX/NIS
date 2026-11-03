@@ -48,6 +48,50 @@ def _audit(
     )
 
 
+def _business_context(request: Request, principal: Principal, payload) -> str:  # noqa: ANN001
+    """读取业务对象正文，作为模型提示词素材；读不到就返回空串（不影响请求）。"""
+
+    try:
+        if payload.business_object_type == "recon_record":
+            client = getattr(request.app.state, "recon", None)
+            if client is None:
+                return ""
+            view = client.authorized_view(
+                payload.business_object_id,
+                requester_id=principal.user_id,
+                purpose="ai",
+                token=principal.raw_token,
+                request_id=getattr(request.state, "request_id", None),
+            )
+            record = view.get("record") or view
+            return (
+                f"侦察记录标题：{record.get('title', '')}\n"
+                f"侦察正文：{record.get('content', '')}\n"
+                f"来源：{record.get('source_type', '')} | 可信度：{record.get('credibility', '')}"
+            )
+        if payload.business_object_type == "analysis_report":
+            client = getattr(request.app.state, "analysis", None)
+            if client is None:
+                return ""
+            view = client.authorized_view(
+                payload.business_object_id,
+                requester_id=principal.user_id,
+                purpose="ai",
+                token=principal.raw_token,
+                request_id=getattr(request.state, "request_id", None),
+            )
+            report = view.get("report") or view
+            return (
+                f"分析报告标题：{report.get('title', '')}\n"
+                f"关键发现：{report.get('key_findings', '')}\n"
+                f"关联关系：{report.get('relations', '') or '无'}\n"
+                f"建议措施：{report.get('recommended_actions', '') or '无'}"
+            )
+    except Exception as exc:  # noqa: BLE001 - 取不到内容时降级为无上下文
+        print(f"[ai] 读取业务对象内容失败，按无上下文生成：{exc}", flush=True)
+    return ""
+
+
 @router.post("/internal/v1/suggestions", summary="请求 AI 建议（可降级）")
 def create_suggestion(
     payload: SuggestionCreate,
@@ -59,6 +103,7 @@ def create_suggestion(
         from nis_shared.errors import ApiError
 
         raise ApiError("FORBIDDEN", "令牌主体与请求声明的用户不一致")
+    context = _business_context(request, principal, payload)
     ai_request, suggestion = service.create_suggestion(
         db,
         stage=payload.stage,
@@ -66,6 +111,7 @@ def create_suggestion(
         business_object_id=payload.business_object_id,
         suggestion_type=payload.suggestion_type,
         requested_by=principal.user_id,
+        context=context,
     )
     _audit(
         request,
