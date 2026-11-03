@@ -208,6 +208,11 @@ function close() {
   if (saving.value || submitting.value) return
   emit('close')
 }
+/** 未保存草稿时：先自动保存，再让 AI 基于该草稿生成建议。 */
+async function ensureForAi(): Promise<string | null> {
+  await saveDraft()
+  return record.value?.id ?? null
+}
 </script>
 
 <template>
@@ -280,8 +285,9 @@ function close() {
           stage="recon"
           object-type="recon_record"
           :object-id="record?.id ?? ''"
+          :ensure-object-id="ensureForAi"
           suggestion-type="summary"
-          :disabled="!record"
+          :disabled="saving || submitting"
         />
       </template>
 

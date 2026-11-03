@@ -277,6 +277,11 @@ async function cancel() {
     cancelling.value = false
   }
 }
+/** 未保存草稿时：先自动保存，再让 AI 基于该草稿生成建议。 */
+async function ensureForAi(): Promise<string | null> {
+  await saveDraft()
+  return command.value?.id ?? null
+}
 </script>
 
 <template>
@@ -349,8 +354,9 @@ async function cancel() {
           stage="decision"
           object-type="command"
           :object-id="command?.id ?? ''"
+          :ensure-object-id="ensureForAi"
           suggestion-type="action_options"
-          :disabled="!command"
+          :disabled="saving || issuing"
         />
       </template>
 
