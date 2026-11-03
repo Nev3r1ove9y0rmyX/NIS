@@ -78,11 +78,14 @@ def forward(
     # 下游（IAM）需要真实客户端地址做设备绑定校验：
     # 优先沿用反向代理传来的 X-Forwarded-For 链（最左为真实客户端），
     # 只有没有该头时才退回直连地址，避免把所有终端都记成边缘代理的地址。
+    # 真实客户端地址：边缘 nginx 已用 $remote_addr 覆盖 X-Real-IP / X-Forwarded-For，
+    # 这里优先取 X-Real-IP，避免任何客户端自带的 X-Forwarded-For 被当作可信来源。
+    real_ip = request.headers.get("x-real-ip", "").strip()
     incoming_xff = request.headers.get("x-forwarded-for", "").strip()
-    if incoming_xff:
-        headers["X-Forwarded-For"] = incoming_xff
-    elif request.client is not None:
-        headers["X-Forwarded-For"] = request.client.host
+    client_ip = real_ip or incoming_xff or (request.client.host if request.client else "")
+    if client_ip:
+        headers["X-Forwarded-For"] = client_ip
+        headers["X-Real-IP"] = client_ip
     if "x-device-mac" in request.headers:
         headers["X-Device-MAC"] = request.headers["x-device-mac"]
     response: httpx.Response = _upstream_http(request, upstream).request(
