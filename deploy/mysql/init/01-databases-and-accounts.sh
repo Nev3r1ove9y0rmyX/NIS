@@ -61,6 +61,9 @@ EOSQL
   if [ "$schema" = "nis_audit" ]; then
     run_sql --database=mysql <<EOSQL
 GRANT SELECT, INSERT ON \`$schema\`.* TO '$app_user'@'%';
+  # 审计事件表只追加，但 audit_trace_index 需要 UPDATE（写 completed_at / event_count），
+  # 否则同一请求的第二条事件会因权限不足写失败，调用链只剩 1 条。
+  GRANT SELECT, INSERT, UPDATE ON \`$schema\`.audit_trace_index TO '$app_user'@'%';
 EOSQL
     echo "[nis-init] $schema 运行账号仅授予 SELECT/INSERT（审计只追加）"
   else
