@@ -201,6 +201,39 @@ paths:
         '409':
           $ref: '#/components/responses/Conflict'
 
+  /internal/v1/assignments/{assignment_id}/transfer:
+    parameters:
+      - name: assignment_id
+        in: path
+        required: true
+        schema:
+          $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+    post:
+      tags: [执行分配]
+      operationId: transferAssignmentInternal
+      summary: 转交执行任务（内部）
+      description: 旧分配置为 cancelled，为目标执行员新建 pending 分配；调用方需回写决策侧两次。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_version, target_executor_id]
+              properties:
+                expected_version:
+                  type: integer
+                target_executor_id:
+                  $ref: '../schemas/common.yaml#/components/schemas/Uuid'
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: 新分配
+          content:
+            application/json:
+              schema:
+                type: object
   /internal/v1/assignments/{assignment_id}/complete:
     parameters:
       - name: assignment_id

@@ -22,6 +22,42 @@ from nis_shared.auth import Principal, get_principal, require_permission
 from nis_shared.errors import ApiError
 from nis_shared.pagination import PageQuery, page_query
 
+def _sync_report_state(
+    request: Request,
+    command,  # noqa: ANN001 - Command 模型
+    principal: Principal,
+    *,
+    state: str,
+) -> None:
+    """把决策状态回写到分析报告；失败只记审计，不影响指令主流程。"""
+
+    report_id = getattr(command, "source_report_id", None)
+    if not report_id:
+        return
+    analysis = getattr(request.app.state, "analysis", None)
+    if analysis is None:
+        return
+    try:
+        analysis.decision_state(
+            report_id,
+            state=state,
+            command_id=command.id if state == "decided" else None,
+            reason=None,
+            token=principal.raw_token,
+            request_id=getattr(request.state, "request_id", None),
+        )
+    except ApiError as exc:
+        _audit(
+            request,
+            "analysis_report.decision_state_writeback",
+            "failure",
+            principal=principal,
+            resource_id=report_id,
+            error_code=exc.code,
+            details={"state": state},
+        )
+
+
 router = APIRouter(tags=["决策指令"])
 
 
@@ -132,6 +168,8 @@ def create_command(
         deadline=payload.deadline,
         source_report_id=payload.source_report_id,
     )
+    # 决策员开始研判：报告从 assigned 进入 under_decision
+    _sync_report_state(request, command, principal, state="under_decision")
     _audit(
         request,
         "command.create",
@@ -304,6 +342,8 @@ def issue_command(
     issued = service.attach_assignments(
         db, issuing, actor_id=principal.user_id, created=created
     )
+    # 指令已下达：报告进入 decided（带 command_id），与状态机 assigned→under_decision→decided 一致
+    _sync_report_state(request, issued, principal, state="decided")
     _audit(
         request,
         "command.issue",

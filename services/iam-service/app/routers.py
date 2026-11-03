@@ -27,12 +27,14 @@ from app.payloads import (
     ResolveUsersRequest,
     RoleAssignRequest,
     RoleCreateRequest,
+    DeviceBindingRequest,
     RolePermissionsRequest,
     UserCreateRequest,
     UserPatchRequest,
 )
 from nis_shared.auth import Principal
 from nis_shared.errors import ApiError
+from nis_shared.jwt_tokens import TokenError, decode_token
 from nis_shared.pagination import PageQuery, page_query
 
 auth_router = APIRouter(tags=["认证"])
@@ -75,7 +77,20 @@ def _audit(
 @auth_router.post("/internal/v1/auth/login", summary="校验用户名密码并签发令牌")
 def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)) -> dict:
     try:
-        session = service.login(db, signing_key(), payload.username, payload.password)
+        forwarded = request.headers.get("x-forwarded-for") or ""
+        client_ip = (
+            forwarded.split(",")[0].strip()
+            if forwarded
+            else (request.client.host if request.client else None)
+        )
+        session = service.login(
+            db,
+            signing_key(),
+            payload.username,
+            payload.password,
+            client_ip=client_ip,
+            device_mac=request.headers.get("x-device-mac"),
+        )
     except ApiError as exc:
         _audit(
             request,
@@ -109,6 +124,21 @@ def current_user(
     db: Session = Depends(get_db),
     principal: Principal = Depends(iam_principal),
 ) -> dict:
+    try:
+        payload = decode_token(principal.raw_token, signing_key().public_key_pem)
+    except TokenError as exc:
+        raise ApiError("UNAUTHENTICATED", "令牌无效或已过期") from exc
+    session = service.require_active_session(db, payload.jti)
+    forwarded = request.headers.get("x-forwarded-for") or ""
+    service.touch_session(
+        db,
+        session,
+        client_ip=(
+            forwarded.split(",")[0].strip()
+            if forwarded
+            else (request.client.host if request.client else None)
+        ),
+    )
     user = service.get_user_by_id(db, principal.user_id)
     if user is None:
         raise ApiError("UNAUTHENTICATED", "账号不存在")
@@ -259,7 +289,10 @@ def assign_user_role(
 
 
 @admin_router.delete(
-    "/internal/v1/users/{user_id}/roles/{role_code}", status_code=204, summary="撤销角色"
+    "/internal/v1/users/{user_id}/roles/{role_code}",
+    status_code=204,
+    response_model=None,  # 204 不允许响应体；future annotations 下 -> None 会被解析成 NoneType
+    summary="撤销角色",
 )
 def revoke_user_role(
     user_id: str,
@@ -419,3 +452,67 @@ def resolve_users(
         )
     }
 
+
+
+@admin_router.get("/internal/v1/users/{user_id}/device-binding", summary="查看账号设备绑定")
+def get_device_binding(
+    user_id: str,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_permission_local("iam:manage")),
+) -> dict:
+    return service.device_binding_view(db, user_id)
+
+
+@admin_router.put("/internal/v1/users/{user_id}/device-binding", summary="设置账号设备绑定")
+def put_device_binding(
+    user_id: str,
+    payload: DeviceBindingRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_permission_local("iam:manage")),
+) -> dict:
+    result = service.set_device_binding(
+        db,
+        user_id,
+        allowed_ips=payload.allowed_ips,
+        allowed_macs=payload.allowed_macs,
+        actor_id=principal.user_id,
+    )
+    _audit(
+        request,
+        "user.device_binding.update",
+        "success",
+        actor=principal,
+        resource_type="user",
+        resource_id=user_id,
+        details={"allowed_ips": result["allowed_ips"], "allowed_macs": result["allowed_macs"]},
+    )
+    return result
+
+
+@admin_router.get("/internal/v1/admin/users/online", summary="在线用户列表")
+def list_online(
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_permission_local("iam:manage")),
+) -> dict:
+    return service.online_view(db)
+
+
+@admin_router.post("/internal/v1/admin/users/{user_id}/force-logout", summary="强制下线")
+def force_logout(
+    user_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    principal: Principal = Depends(require_permission_local("iam:manage")),
+) -> dict:
+    result = service.force_logout(db, user_id, actor_id=principal.user_id)
+    _audit(
+        request,
+        "user.force_logout",
+        "success",
+        actor=principal,
+        resource_type="user",
+        resource_id=user_id,
+        details={"revoked_at": result["revoked_at"], "revoked_sessions": result["revoked_sessions"]},
+    )
+    return result

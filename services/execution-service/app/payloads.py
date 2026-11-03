@@ -42,3 +42,11 @@ class CompleteRequest(BaseModel):
     summary: str = Field(min_length=1, max_length=2000)
     detail: str | None = Field(default=None, max_length=8000)
     evidence: list[EvidenceInput] = Field(default_factory=list)
+
+
+class TransferRequest(BaseModel):
+    """把未完成的任务转交给其他执行员。"""
+
+    expected_version: int = Field(ge=1)
+    target_executor_id: str = Field(min_length=36, max_length=36)
+    reason: str | None = Field(default=None, max_length=500)

@@ -314,6 +314,26 @@ def start_assignment(
     return JSONResponse(item, status_code=code)
 
 
+class TransferRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    target_executor_id: str = Field(min_length=36, max_length=36)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+@router.post("/assignments/{assignment_id}/transfer", summary="转交执行任务")
+def transfer_assignment(
+    assignment_id: str, payload: TransferRequest, request: Request
+) -> JSONResponse:
+    _principal(request, "execution:respond")
+    code, item = _fwd(
+        request,
+        "POST",
+        f"/internal/v1/assignments/{assignment_id}/transfer",
+        json_body=payload.model_dump(),
+    )
+    return JSONResponse(item, status_code=code)
+
+
 @router.post("/assignments/{assignment_id}/complete", summary="提交执行结果")
 def complete_assignment(
     assignment_id: str, payload: CompleteRequest, request: Request

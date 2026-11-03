@@ -3,13 +3,18 @@
 **人在回路**（ADR-003）：建议只是建议，``status`` 只有经人工 accept/edit/reject 才变化；
 业务服务只能读取 ``accepted``/``edited`` 且带确认人的内容，不能凭建议直接驱动状态。
 
-本期不接外部大模型：按 ``stage`` 与 ``suggestion_type`` 生成结构化的规则模板（可复现、零依赖），
-模型不可用时按契约返回 503，人工流程照常继续（NFR-AI-001）。
+支持两种后端：
+- `AI_PROVIDER=local`（默认）：按 ``stage`` 与 ``suggestion_type`` 生成结构化规则模板，可复现、零依赖；
+- `AI_PROVIDER=ollama|openai`：调用外部模型（Ollama 原生接口 / OpenAI 兼容接口），
+  超时或报错自动回退规则模板，保证演示与业务不中断；``AI_ENABLED=false`` 时仍按契约返回 503。
 """
 
 from __future__ import annotations
 
+import json
 import os
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 
 from sqlalchemy import func, select
@@ -78,15 +83,121 @@ def enabled() -> bool:
     return os.environ.get("AI_ENABLED", "true").lower() not in {"false", "0", "no"}
 
 
+PROVIDER = os.environ.get("AI_PROVIDER", "local").strip().lower()
+AI_BASE_URL = os.environ.get("AI_BASE_URL", "").rstrip("/")
+AI_MODEL = os.environ.get("AI_MODEL", "").strip()
+AI_API_KEY = os.environ.get("AI_API_KEY", "").strip()
+AI_TIMEOUT_SECONDS = float(os.environ.get("AI_TIMEOUT_SECONDS", "20"))
+
+#: 每个环节给模型的提示词（明确要求只做辅助、输出 JSON）
+PROMPTS: dict[tuple[str, str], str] = {
+    ("recon", "summary"): "你是侦察辅助助手。请把侦察情况按时间、地点、人员、装备四要素归纳。",
+    ("recon", "missing_field_hint"): "你是侦察辅助助手。请指出这条侦察记录可能缺失的字段及其原因。",
+    ("analysis", "summary"): "你是分析辅助助手。请给出结论先行的分析要点，不替分析员下结论。",
+    ("analysis", "risk_assessment"): "你是分析辅助助手。请给出风险等级建议（low/medium/high）与理由。",
+    ("decision", "action_options"): "你是决策辅助助手。请给出 2-3 个可选行动方案供决策员比较。",
+    ("decision", "conflict_hint"): "你是决策辅助助手。请提示下达指令时可能出现的冲突点。",
+    ("execution", "summary"): "你是执行辅助助手。请给出执行结果摘要模板（结论、证据、异常）。",
+}
+
+
+def _prompt(stage: str, suggestion_type: str) -> str:
+    base = PROMPTS.get((stage, suggestion_type), "你是协同调度系统的辅助助手。")
+    return (
+        f"{base}\n"
+        "要求：只输出 JSON，字段为 headline（一句话结论）、items（字符串数组，2-4 条）、"
+        'caveat（一句话提醒，说明最终由人工确认）。不要输出 JSON 以外的任何文字。'
+    )
+
+
+def _post_json(url: str, payload: dict, *, headers: dict | None = None) -> dict:
+    data = json.dumps(payload).encode("utf-8")
+    request_headers = {"Content-Type": "application/json"}
+    if headers:
+        request_headers.update(headers)
+    req = urllib.request.Request(url, data=data, headers=request_headers, method="POST")
+    with urllib.request.urlopen(req, timeout=AI_TIMEOUT_SECONDS) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _extract_json(text: str) -> dict | None:
+    """模型输出里抓第一个 JSON 对象；失败返回 None。"""
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        value = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _call_model(stage: str, suggestion_type: str) -> dict[str, object] | None:
+    """调用真实模型；任何异常都返回 None，由调用方回退模板。"""
+
+    if PROVIDER not in {"ollama", "openai"} or not AI_BASE_URL or not AI_MODEL:
+        return None
+    prompt = _prompt(stage, suggestion_type)
+    try:
+        if PROVIDER == "ollama":
+            payload = {
+                "model": AI_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "format": "json",
+                "options": {"temperature": 0.3, "num_predict": 320},
+            }
+            data = _post_json(f"{AI_BASE_URL}/api/generate", payload)
+            text = str(data.get("response", ""))
+        else:
+            payload = {
+                "model": AI_MODEL,
+                "messages": [
+                    {"role": "system", "content": "你是协同调度系统的辅助助手，只输出 JSON。"},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.3,
+                "response_format": {"type": "json_object"},
+            }
+            headers = {"Authorization": f"Bearer {AI_API_KEY}"} if AI_API_KEY else None
+            data = _post_json(f"{AI_BASE_URL}/chat/completions", payload, headers=headers)
+            text = str(data["choices"][0]["message"]["content"])
+    except (urllib.error.URLError, TimeoutError, KeyError, ValueError, json.JSONDecodeError) as exc:
+        print(f"[ai] 模型调用失败，回退规则模板：{exc}", flush=True)
+        return None
+
+    content = _extract_json(text)
+    if content is None:
+        print("[ai] 模型输出不是合法 JSON，回退规则模板", flush=True)
+        return None
+    return {
+        "content": content,
+        "confidence": 0.75,
+        "source_refs": [f"model:{PROVIDER}/{AI_MODEL}"],
+        "model_name": AI_MODEL,
+        "model_version": PROVIDER,
+        "latency_ms": 0,
+    }
+
+
 def generate(stage: str, suggestion_type: str) -> dict[str, object]:
     if not enabled():
         raise ApiError("SERVICE_UNAVAILABLE", "AI 建议服务当前不可用，请人工完成该环节")
+
+    generated = _call_model(stage, suggestion_type)
+    if generated is not None:
+        return generated
+
     template = TEMPLATES.get((stage, suggestion_type), DEFAULT_TEMPLATE)
+    # 只有"配置了外部模型但调用失败"才标注 (fallback)；纯规则模板模式保持原模型名
+    fallback = PROVIDER in {"ollama", "openai"}
     return {
         "content": template,
         "confidence": 0.6,
         "source_refs": [f"rule:{stage}/{suggestion_type}"],
-        "model_name": MODEL_NAME,
+        "model_name": f"{MODEL_NAME}(fallback)" if fallback else MODEL_NAME,
         "model_version": MODEL_VERSION,
         "latency_ms": 0,
     }

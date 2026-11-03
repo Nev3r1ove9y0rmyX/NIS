@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from nis_shared.enums import OrganizationType, UserStatus
@@ -109,3 +109,34 @@ class RolePermission(Base, HeadFieldsMixin):
         Index("uq_role_permissions_role_permission", "role_id", "permission_id", unique=True),
         Index("ix_role_permissions_permission_id", "permission_id"),
     )
+
+
+class UserDeviceBinding(Base, HeadFieldsMixin):
+    """账号与终端绑定：只有列表内的 IP / MAC 允许登录，未配置表示不限制。"""
+
+    __tablename__ = "user_device_bindings"
+
+    id = uuid_pk()
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
+    #: 逗号分隔的允许 IP 列表，留空表示不限制。
+    allowed_ips = Column(Text, nullable=False, default="", server_default="")
+    #: 逗号分隔的允许 MAC 列表，留空表示不限制。
+    allowed_macs = Column(Text, nullable=False, default="", server_default="")
+
+    __table_args__ = (Index("uq_user_device_bindings_user_id", "user_id", unique=True),)
+
+
+class UserSession(Base, HeadFieldsMixin):
+    """登录会话：一个访问令牌一个会话，用于在线状态与强制下线。"""
+
+    __tablename__ = "user_sessions"
+
+    #: 与访问令牌的 jti 一致。
+    id = Column(String(36), primary_key=True)
+    user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
+    last_seen_at = Column(DateTime3, nullable=True)
+    last_ip = Column(String(64), nullable=True)
+    revoked_at = Column(DateTime3, nullable=True)
+    revoked_by = Column(String(36), nullable=True)
+
+    __table_args__ = (Index("ix_user_sessions_user_id", "user_id"),)
