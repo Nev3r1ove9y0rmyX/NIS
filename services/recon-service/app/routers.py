@@ -342,7 +342,7 @@ def update_analysis_state(
 def authorized_view(
     record_id: str,
     requester_user_id: str = Query(min_length=36, max_length=36),
-    purpose: str = Query(pattern="^(analysis|decision|audit)$"),
+    purpose: str = Query(pattern="^(analysis|decision|audit|ai)$"),
     db: Session = Depends(get_db),
     principal: Principal = Depends(get_principal),
 ) -> dict:

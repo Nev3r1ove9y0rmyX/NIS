@@ -396,6 +396,13 @@ def authorized_view(
             raise ApiError("FORBIDDEN", "只有当被指派的决策员可以读取该报告")
     elif purpose == "audit":
         pass
+    elif purpose == "ai":
+        allowed = requester_id in {
+            getattr(report, "author_id", None),
+            getattr(report, "created_by", None),
+        } or is_assigned(report, requester_id)
+        if not allowed:
+            raise ApiError("FORBIDDEN", "只有报告作者或被指派的决策员可以让 AI 读取全文")
     else:
         raise ApiError("INVALID_REQUEST", "未知的读取用途", details={"purpose": purpose})
     return {"report_id": report.id, "granted": True, "report": report_view(report)}
