@@ -96,3 +96,12 @@
   .login-roles{grid-template-columns:1fr}
   .footer-split>.muted{max-width:100%}
 }
+
+/* ==========================================================================
+   03 · 系统管理页签（A，2026-11-03）
+   审计工作台新增「系统管理」视图，用于演示权限配置、限时角色、
+   在线状态/强制下线、账号设备绑定。
+   ========================================================================== */
+.view-switch{display:flex;gap:10px;margin:0 0 18px;flex-wrap:wrap}
+.view-switch button{border:1px solid var(--border);background:#fff;color:var(--muted);padding:8px 18px;border-radius:6px}
+.view-switch button.active{background:var(--green);border-color:var(--green);color:#fff;font-weight:600}
