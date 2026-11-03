@@ -325,11 +325,21 @@ async function downloadEvidence(evidenceId: string, fileName: string) {
             <button v-if="mode === 'complete'" type="button" class="primary" :disabled="busy" @click="complete">
               {{ busy ? '正在提交…' : '提交结果' }}
             </button>
+            <button
+              v-if="mode === 'transfer'"
+              type="button"
+              class="primary"
+              :disabled="busy || !transferTarget"
+              @click="submitTransfer"
+            >
+              {{ busy ? '正在转交…' : '确认转交' }}
+            </button>
           </template>
           <template v-else>
             <button v-if="canReject" type="button" :disabled="busy" @click="mode = 'reject'">拒绝</button>
             <button v-if="canAccept" type="button" class="primary" :disabled="busy" @click="transition('accept')">接收指令</button>
             <button v-if="canStart" type="button" class="primary" :disabled="busy" @click="transition('start')">开始执行</button>
+            <button v-if="canTransfer" type="button" :disabled="busy" @click="openTransfer">转交任务</button>
             <button v-if="canComplete" type="button" class="primary" :disabled="busy" @click="mode = 'complete'">填写结果并提交</button>
           </template>
         </div>
