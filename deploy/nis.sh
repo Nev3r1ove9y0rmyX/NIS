@@ -47,7 +47,7 @@ verify() {
 }
 
 case "${1:-}" in
-  up)    shift; compose up -d --profile app "$@" ;;
+  up)    shift; compose --profile app up -d "$@" ;;
   db)    shift; compose up -d "$@" ;;
   down)  shift; compose --profile app down "$@" ;;
   nuke)  shift; compose --profile app down -v "$@" ;;

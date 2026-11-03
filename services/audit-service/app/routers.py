@@ -26,7 +26,7 @@ router = APIRouter(tags=["审计事件"])
 
 
 class AuditEventCreate(BaseModel):
-    request_id: str = Field(min_length=36, max_length=36)
+    request_id: str = Field(min_length=8, max_length=64)
     service: str = Field(min_length=1, max_length=64)
     event_type: str = Field(pattern="^(user_operation|system_event|security_event)$")
     action: str = Field(min_length=1, max_length=64)
