@@ -116,7 +116,9 @@ services:
 
   iam-service:
     profiles: ["app"]
-    build: { context: ../services/iam-service }
+    build:
+      context: ..
+      dockerfile: services/iam-service/Dockerfile
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-development}
@@ -149,7 +151,9 @@ services:
 
   audit-service:
     profiles: ["app"]
-    build: { context: ../services/audit-service }
+    build:
+      context: ..
+      dockerfile: services/audit-service/Dockerfile
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-development}
@@ -160,6 +164,7 @@ services:
       AUDIT_DB_USER: ${AUDIT_DB_USER:-nis_audit_app}
       AUDIT_DB_PASSWORD: ${AUDIT_DB_PASSWORD}
       AUDIT_DB_NAME: ${AUDIT_DB_NAME:-nis_audit}
+      IAM_SERVICE_URL: http://iam-service:8001
       HTTP_CONNECT_TIMEOUT: ${HTTP_CONNECT_TIMEOUT:-1}
       HTTP_TOTAL_TIMEOUT: ${HTTP_TOTAL_TIMEOUT:-3}
     secrets:
@@ -174,7 +179,9 @@ services:
 
   recon-service:
     profiles: ["app"]
-    build: { context: ../services/recon-service }
+    build:
+      context: ..
+      dockerfile: services/recon-service/Dockerfile
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-development}
@@ -205,7 +212,9 @@ services:
 
   analysis-service:
     profiles: ["app"]
-    build: { context: ../services/analysis-service }
+    build:
+      context: ..
+      dockerfile: services/analysis-service/Dockerfile
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-development}
@@ -237,7 +246,9 @@ services:
 
   decision-service:
     profiles: ["app"]
-    build: { context: ../services/decision-service }
+    build:
+      context: ..
+      dockerfile: services/decision-service/Dockerfile
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-development}
@@ -269,7 +280,9 @@ services:
 
   execution-service:
     profiles: ["app"]
-    build: { context: ../services/execution-service }
+    build:
+      context: ..
+      dockerfile: services/execution-service/Dockerfile
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-development}
@@ -281,6 +294,7 @@ services:
       EXECUTION_DB_PASSWORD: ${EXECUTION_DB_PASSWORD}
       EXECUTION_DB_NAME: ${EXECUTION_DB_NAME:-nis_execution}
       IAM_SERVICE_URL: http://iam-service:8001
+      DECISION_SERVICE_URL: http://decision-service:8004
       AI_SERVICE_URL: http://ai-service:8006
       AUDIT_SERVICE_URL: http://audit-service:8007
       HTTP_CONNECT_TIMEOUT: ${HTTP_CONNECT_TIMEOUT:-1}
@@ -300,7 +314,9 @@ services:
 
   ai-service:
     profiles: ["app"]
-    build: { context: ../services/ai-service }
+    build:
+      context: ..
+      dockerfile: services/ai-service/Dockerfile
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-development}
@@ -311,17 +327,21 @@ services:
       AI_DB_USER: ${AI_DB_USER:-nis_ai_app}
       AI_DB_PASSWORD: ${AI_DB_PASSWORD}
       AI_DB_NAME: ${AI_DB_NAME:-nis_ai}
+      AI_ENABLED: ${AI_ENABLED:-true}
       AI_PROVIDER: ${AI_PROVIDER:-local}
       AI_BASE_URL: ${AI_BASE_URL:-http://127.0.0.1:11434}
       AI_MODEL: ${AI_MODEL:-qwen2.5:7b}
       AI_API_KEY: ${AI_API_KEY:-}
+      IAM_SERVICE_URL: http://iam-service:8001
       AUDIT_SERVICE_URL: http://audit-service:8007
       AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-15}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
     secrets:
       - source: jwt_public_key
         target: jwt_public.pem
-    networks: [service_net, data_net]
+    # AI 需要访问宿主机上的模型服务（Ollama），internal 网络无出网能力，
+    # 因此额外加入 edge_net；本服务不被 nginx 代理，仍不对外暴露。
+    networks: [service_net, data_net, edge_net]
     depends_on:
       mysql: { condition: service_healthy }
     healthcheck:
@@ -330,7 +350,9 @@ services:
 
   api-gateway:
     profiles: ["app"]
-    build: { context: ../services/api-gateway }
+    build:
+      context: ..
+      dockerfile: services/api-gateway/Dockerfile
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-development}

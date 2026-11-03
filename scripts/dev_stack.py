@@ -168,6 +168,16 @@ def init_database() -> int:
     return 0
 
 
+def _port_in_use(port: int) -> bool:
+    """端口上是否已有服务在监听。"""
+
+    import socket  # noqa: PLC0415
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
 def start_all() -> int:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -175,6 +185,19 @@ def start_all() -> int:
     processes: list[subprocess.Popen] = []
     base_env = os.environ.copy()
     base_env["PYTHONUTF8"] = "1"
+
+    # 防呆：端口已被占用说明已有实例在跑，直接启动会让新进程绑定失败后秒退，
+    # 而健康检查又会误探到旧实例，看起来"启动成功随后全部退出"。
+    busy = [
+        f"{service}({active_port(service)})"
+        for service, _, _ in SERVICES
+        if _port_in_use(active_port(service))
+    ]
+    if busy:
+        print("[错误  ] 以下端口已被占用：" + "、".join(busy))
+        print("[提示  ] 可能已有实例在运行，先执行：python scripts/dev_stack.py stop")
+        print("[提示  ] 若是其他程序占用，请关闭该程序或设置 GATEWAY_PORT 后重试。")
+        return 1
 
     for service, prefix, declared_port in SERVICES:
         port = active_port(service)
@@ -231,6 +254,19 @@ def start_all() -> int:
         print(
             f"[ready ] 8 个服务全部就绪：前端可指向 http://127.0.0.1:{active_port('api-gateway')}/api/v1"
         )
+
+    dead = [
+        f"{service}(code={process.returncode})"
+        for (service, _, _), process in zip(SERVICES, processes, strict=False)
+        if process.poll() is not None
+    ]
+    if dead:
+        print("[错误  ] 以下服务启动后立即退出：" + "、".join(dead))
+        print("[提示  ] 多为端口被占用或依赖缺失，查看 .localdata/logs/<service>.log 的首个报错。")
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+        return 1
 
     running = {service: process for service, process in zip([s for s, _, _ in SERVICES], processes, strict=False)}
     try:

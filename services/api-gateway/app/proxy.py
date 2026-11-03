@@ -75,6 +75,16 @@ def forward(
 
     authenticate(request, public=public, permission=permission)
     headers = {name: request.headers[name] for name in FORWARD_HEADERS if name in request.headers}
+    # 下游（IAM）需要真实客户端地址做设备绑定校验：
+    # 优先沿用反向代理传来的 X-Forwarded-For 链（最左为真实客户端），
+    # 只有没有该头时才退回直连地址，避免把所有终端都记成边缘代理的地址。
+    incoming_xff = request.headers.get("x-forwarded-for", "").strip()
+    if incoming_xff:
+        headers["X-Forwarded-For"] = incoming_xff
+    elif request.client is not None:
+        headers["X-Forwarded-For"] = request.client.host
+    if "x-device-mac" in request.headers:
+        headers["X-Device-MAC"] = request.headers["x-device-mac"]
     response: httpx.Response = _upstream_http(request, upstream).request(
         method,
         path,
